@@ -72,6 +72,7 @@ function issueToTuple(issue, slot) {
   let elapsedMin = null;
   let breached = null;
   let goalMin = null;
+  let ongoingBreachMs = null;
 
   const sla = issue.fields && issue.fields.customfield_10121;
   if (sla && Array.isArray(sla.completedCycles) && sla.completedCycles.length > 0) {
@@ -84,9 +85,21 @@ function issueToTuple(issue, slot) {
     if (cycle.goalDuration && typeof cycle.goalDuration.millis === "number") {
       goalMin = cycle.goalDuration.millis / 60000;
     }
+  } else if (sla && sla.ongoingCycle) {
+    // No first response yet: the SLA clock is still running. Capture the goal
+    // and the exact wall-clock breach moment (Jira already accounts for
+    // calendar/business-hours pauses in breachTime) so the SLA watch tab can
+    // show tickets counting down to a 30-minute breach in real time.
+    const oc = sla.ongoingCycle;
+    if (oc.goalDuration && typeof oc.goalDuration.millis === "number") {
+      goalMin = oc.goalDuration.millis / 60000;
+    }
+    if (oc.breachTime && typeof oc.breachTime.epochMillis === "number") {
+      ongoingBreachMs = oc.breachTime.epochMillis;
+    }
   }
 
-  return [slot, createdMs, elapsedMin, breached, key, summary, goalMin];
+  return [slot, createdMs, elapsedMin, breached, key, summary, goalMin, ongoingBreachMs];
 }
 
 async function pullAllTickets(onProgress) {
@@ -189,6 +202,10 @@ app.use(express.json());
 
 app.get("/healthz", function (req, res) {
   res.send("ok");
+});
+
+app.get("/favicon.ico", function (req, res) {
+  res.status(204).end();
 });
 
 // Refresh can be triggered either by an authenticated browser session, or by

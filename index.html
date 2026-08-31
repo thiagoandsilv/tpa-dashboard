@@ -226,6 +226,18 @@
   .tab-btn .dot{ width:7px; height:7px; border-radius:2px; flex:none; }
   .tab-btn.active{ background:var(--accent); color:var(--surface); }
   .tab-btn:not(.active):hover{ background:var(--accent-wash); color:var(--text-primary); }
+  .tab-btn-sla{ margin-left:4px; border-left:1px solid var(--gridline); border-radius:0 6px 6px 0; padding-left:14px; }
+  .tab-btn-sla.active{ background:var(--status-critical); color:#fff; }
+
+  /* ---------- SLA watch tab ---------- */
+  .sla-table tr.risk-critical{ background:color-mix(in srgb, var(--status-critical) 9%, transparent); }
+  .sla-table tr.risk-warning{ background:color-mix(in srgb, var(--status-warning) 10%, transparent); }
+  .sla-live-dot{
+    display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--status-critical); margin-right:6px;
+    animation:sla-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes sla-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.35; } }
 
   .period-group{
     display:flex;
@@ -640,7 +652,7 @@
   <div class="controls-bar">
     <div class="tabs" id="analyst-tabs" role="tablist" aria-label="Analista"></div>
 
-    <div class="period-group">
+    <div class="period-group" id="period-group">
       <div class="pill-group" id="period-pills" role="group" aria-label="Período"></div>
       <div class="date-range" id="custom-range" hidden>
         <input type="date" id="custom-from">
@@ -724,8 +736,21 @@
 
   </div>
 
+  <div id="sla-wrap" hidden>
+    <section class="kpi-grid" id="sla-kpi-grid" aria-label="Indicadores de risco de SLA"></section>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="panel-title">Chamados em risco de estouro (SLA de 30 min)</p>
+          <p class="panel-desc" id="sla-desc">Chamados sem primeira resposta com meta de 30 minutos, ordenados do mais urgente para o menos urgente</p>
+        </div>
+      </div>
+      <div class="table-scroll" id="sla-table-wrap"></div>
+    </div>
+  </div>
+
   <footer class="notes">
-    <strong>Metodologia:</strong> cada valor de TPA vem do ciclo concluído do SLA “Tempo para primeiro atendimento” do Jira Service Management (campo customfield_10121) no projeto SUPORTE. Chamados sem primeira resposta registrada até a coleta entram como “pendentes” e não contam na média nem na taxa de estouro. Este arquivo é um retrato estático dos chamados coletados até a data acima — o botão “Atualizar” recarrega o arquivo local; para trazer chamados novos do Jira, peça pro Claude gerar uma nova versão e substitua este arquivo na mesma pasta.
+    <strong>Metodologia:</strong> cada valor de TPA vem do ciclo concluído do SLA “Tempo para primeiro atendimento” do Jira Service Management (campo customfield_10121) no projeto SUPORTE. Chamados sem primeira resposta registrada até a coleta entram como “pendentes” e não contam na média nem na taxa de estouro. A aba “SLA” monitora, em tempo real, os chamados pendentes cuja meta é de 30 minutos. Os dados vêm direto do Jira a cada atualização — clique em “Atualizar” a qualquer momento para buscar os chamados mais recentes.
   </footer>
 </div>
 
@@ -733,7 +758,9 @@
 (function(){
   "use strict";
 
-  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null)] */
+  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null]
+     ongoingBreachEpochMs is set only for tickets still awaiting first response — the exact
+     wall-clock moment their SLA cycle will breach (used by the "SLA" watch tab). */
   var TICKETS = [];
   var META = null;
 
@@ -1086,16 +1113,17 @@
   /* ================= tabs & pills ================= */
   var tabsEl = document.getElementById('analyst-tabs');
   function renderTabs(){
-    var all = [{ name:'Visão geral', short:'Visão geral', slot:'all' }].concat(ANALYSTS);
+    var all = [{ name:'Visão geral', short:'Visão geral', slot:'all' }].concat(ANALYSTS).concat([{ name:'SLA', short:'⏱ SLA', slot:'sla' }]);
     tabsEl.innerHTML = all.map(function(a){
       var active = state.analyst === a.slot;
-      var dot = a.slot === 'all' ? '' : '<span class="dot" style="background:'+seriesColor(a.slot)+'"></span>';
-      return '<button type="button" class="tab-btn'+(active?' active':'')+'" data-slot="'+a.slot+'" role="tab" aria-selected="'+active+'">'+dot+a.short+'</button>';
+      var dot = (a.slot === 'all' || a.slot === 'sla') ? '' : '<span class="dot" style="background:'+seriesColor(a.slot)+'"></span>';
+      var cls = 'tab-btn' + (active?' active':'') + (a.slot === 'sla' ? ' tab-btn-sla' : '');
+      return '<button type="button" class="'+cls+'" data-slot="'+a.slot+'" role="tab" aria-selected="'+active+'">'+dot+a.short+'</button>';
     }).join('');
     tabsEl.querySelectorAll('.tab-btn').forEach(function(btn){
       btn.addEventListener('click', function(){
         var v = btn.getAttribute('data-slot');
-        state.analyst = (v === 'all') ? 'all' : parseInt(v,10);
+        state.analyst = (v === 'all' || v === 'sla') ? v : parseInt(v,10);
         renderTabs();
         renderAll();
       });
@@ -1268,6 +1296,87 @@
       tile.addEventListener('click', activateKpi);
       tile.addEventListener('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); activateKpi(); } });
     });
+  }
+
+  /* ================= SLA watch (live, ignores period) ================= */
+  var slaTickerHandle = null;
+  function startSlaTicker(){
+    stopSlaTicker();
+    slaTickerHandle = setInterval(function(){
+      if (state.analyst === 'sla') renderSlaWatch();
+    }, 20000);
+  }
+  function stopSlaTicker(){
+    if (slaTickerHandle){ clearInterval(slaTickerHandle); slaTickerHandle = null; }
+  }
+
+  function slaRiskStatus(remainingMin){
+    if (remainingMin <= 0) return { key:'critical', label:'Estourado' };
+    if (remainingMin <= 5) return { key:'critical', label:'Crítico' };
+    if (remainingMin <= 15) return { key:'warning', label:'Atenção' };
+    return { key:'good', label:'No prazo' };
+  }
+
+  function renderSlaWatch(){
+    var now = Date.now();
+    // r[7] = ongoingBreachMs (only set for tickets still awaiting first response);
+    // r[6] = goalMin. Only the 30-minute SLA tier is shown here, per request.
+    var rows = TICKETS.filter(function(r){
+      return r[7] != null && r[2] === null && Math.round(r[6]) === 30;
+    });
+    rows.sort(function(x,y){ return x[7] - y[7]; }); // soonest breach first
+
+    var breachedCount = 0, criticalCount = 0, warningCount = 0;
+    rows.forEach(function(r){
+      var remMin = (r[7] - now) / 60000;
+      if (remMin <= 0) breachedCount++;
+      else if (remMin <= 5) criticalCount++;
+      else if (remMin <= 15) warningCount++;
+    });
+
+    var kpis = [
+      { label:'Em risco (meta 30 min)', value: fmtInt(rows.length), sub:'chamados pendentes de resposta' },
+      { label:'Já estourados', value: fmtInt(breachedCount), sub:'aguardando resposta além do prazo' },
+      { label:'Críticos', value: fmtInt(criticalCount), sub:'restam 5 min ou menos' },
+      { label:'Atenção', value: fmtInt(warningCount), sub:'restam 15 min ou menos' }
+    ];
+    document.getElementById('sla-kpi-grid').innerHTML = kpis.map(function(k){
+      return '<div class="kpi-tile"><p class="kpi-label">'+k.label+'</p>' +
+        '<div class="kpi-value num">'+k.value+'</div>' +
+        '<p class="kpi-sub">'+k.sub+'</p></div>';
+    }).join('');
+
+    document.getElementById('sla-desc').innerHTML =
+      '<span class="sla-live-dot"></span>Atualizado ao vivo a cada 20s · ' + fmtInt(rows.length) +
+      ' chamado(s) pendente(s) com meta de 30 minutos, do mais urgente para o menos urgente';
+
+    var tableEl = document.getElementById('sla-table-wrap');
+    if (!rows.length){
+      tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>Nenhum chamado pendente com meta de 30 minutos no momento.</p></div>';
+      return;
+    }
+
+    var body = rows.map(function(r){
+      var slot = r[0], createdMs = r[1], key = r[4], summary = r[5] || '', breachMs = r[7];
+      var a = analystBySlot(slot);
+      var remMin = (breachMs - now) / 60000;
+      var st = slaRiskStatus(remMin);
+      var rowCls = st.key === 'critical' ? 'risk-critical' : (st.key === 'warning' ? 'risk-warning' : '');
+      var remText = remMin <= 0 ? 'estourado há ' + fmtDurationShort(-remMin) : 'restam ' + fmtDurationShort(remMin);
+      var waitingText = fmtDurationShort((now - createdMs) / 60000);
+      return '<tr class="'+rowCls+'">' +
+        '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(slot)+'"></span>'+(a?a.short:'—')+'</td>' +
+        '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
+        '<td class="summary-cell" title="'+escapeHtml(summary)+'">'+escapeHtml(summary)+'</td>' +
+        '<td class="num">'+fmtDateFullBR(createdMs)+'</td>' +
+        '<td class="num">'+waitingText+'</td>' +
+        '<td class="num">'+remText+'</td>' +
+        '<td class="num"><span class="status-pill '+st.key+'">'+ICONS[st.key]+'<span>'+st.label+'</span></span></td>' +
+        '</tr>';
+    }).join('');
+    tableEl.innerHTML = '<table class="data-table sla-table"><thead><tr>' +
+      '<th style="text-align:left">Analista</th><th style="text-align:left">Chamado</th><th style="text-align:left">Resumo</th><th>Aberto em</th><th>Aguardando há</th><th>Tempo restante</th><th>Status</th>' +
+      '</tr></thead><tbody>'+body+'</tbody></table>';
   }
 
   /* ================= overview charts ================= */
@@ -1528,6 +1637,28 @@
   /* ================= main render ================= */
   function renderAll(){
     closeDrilldown();
+
+    var periodGroupEl = document.getElementById('period-group');
+    var kpiGridEl = document.getElementById('kpi-grid');
+    var emptyWrapEl = document.getElementById('empty-state-wrap');
+    var contentWrapEl = document.getElementById('content-wrap');
+    var slaWrapEl = document.getElementById('sla-wrap');
+
+    if (state.analyst === 'sla'){
+      periodGroupEl.hidden = true;
+      kpiGridEl.hidden = true;
+      emptyWrapEl.hidden = true;
+      contentWrapEl.hidden = true;
+      slaWrapEl.hidden = false;
+      document.getElementById('subtitle').textContent = 'Monitoramento ao vivo dos chamados pendentes com meta de 30 minutos de primeira resposta.';
+      renderSlaWatch();
+      startSlaTicker();
+      return;
+    }
+    periodGroupEl.hidden = false;
+    kpiGridEl.hidden = false;
+    slaWrapEl.hidden = true;
+    stopSlaTicker();
 
     var period = computePeriod(state);
     var granularity = granularityFor(period.from, period.to);
