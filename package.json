@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "cron": "node scripts/cron_refresh.js"
+    "cron": "node cron_refresh.js"
   },
   "dependencies": {
     "express": "^4.19.2"
