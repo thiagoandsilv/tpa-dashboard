@@ -228,6 +228,11 @@
   .tab-btn:not(.active):hover{ background:var(--accent-wash); color:var(--text-primary); }
   .tab-btn-sla{ margin-left:4px; border-left:1px solid var(--gridline); border-radius:0 6px 6px 0; padding-left:14px; }
   .tab-btn-sla.active{ background:var(--status-critical); color:#fff; }
+  .tab-btn-sla.tab-btn-sla-alert{ animation: sla-tab-blink 1s steps(1,end) infinite; border-color:var(--status-critical); }
+  @keyframes sla-tab-blink{
+    0%, 49%{ background:var(--status-critical); color:#fff; }
+    50%, 100%{ background:transparent; color:var(--status-critical); }
+  }
 
   /* ---------- SLA watch tab ---------- */
   .sla-table tr.risk-critical{ background:color-mix(in srgb, var(--status-critical) 9%, transparent); }
@@ -1128,6 +1133,7 @@
         renderAll();
       });
     });
+    updateSlaTabAlert();
   }
 
   var PERIOD_OPTS = [
@@ -1309,6 +1315,27 @@
   function stopSlaTicker(){
     if (slaTickerHandle){ clearInterval(slaTickerHandle); slaTickerHandle = null; }
   }
+
+  // Faz a aba "SLA" piscar (mesmo com outra aba aberta) quando houver algum
+  // chamado pendente de primeira resposta a 5 minutos ou menos de estourar a
+  // meta de 30 min — ou já estourado. Roda independente da aba ativa.
+  function slaTabHasAlert(){
+    var now = Date.now();
+    for (var i = 0; i < TICKETS.length; i++){
+      var r = TICKETS[i];
+      if (r[7] != null && r[2] === null && Math.round(r[6]) === 30){
+        var remMin = (r[7] - now) / 60000;
+        if (remMin <= 5) return true;
+      }
+    }
+    return false;
+  }
+  function updateSlaTabAlert(){
+    var btn = document.querySelector('.tab-btn-sla');
+    if (!btn) return;
+    btn.classList.toggle('tab-btn-sla-alert', slaTabHasAlert());
+  }
+  setInterval(updateSlaTabAlert, 20000);
 
   function slaRiskStatus(remainingMin){
     if (remainingMin <= 0) return { key:'critical', label:'Estourado' };
