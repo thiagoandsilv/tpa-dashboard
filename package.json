@@ -1,0 +1,16 @@
+{
+  "name": "tpa-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dashboard de TPA (tempo de primeiro atendimento) da Central de Suporte, com dados ao vivo do Jira Service Management.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "cron": "node scripts/cron_refresh.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
