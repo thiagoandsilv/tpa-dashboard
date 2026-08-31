@@ -19,6 +19,10 @@ const APP_USER = process.env.APP_USER || "accerte";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 const CRON_TOKEN = process.env.CRON_TOKEN || "";
 
+// Auto-refresh: o próprio processo busca dados novos no Jira periodicamente,
+// sem depender de clique manual nem de um Cron Job separado (e sem custo extra).
+const AUTO_REFRESH_MINUTES = parseInt(process.env.AUTO_REFRESH_MINUTES || "5", 10);
+
 const ANALYSTS = [
   { slot: 1, name: "Lucas Viana Hahn", short: "Lucas V. Hahn", accountId: "712020:081c9569-f2f3-4c30-914c-507a0def029b" },
   { slot: 2, name: "Vinícius Felipe de Souza Soares", short: "Vinícius Soares", accountId: "712020:8148d69f-4c1a-41d2-8d15-e1780d575fff" },
@@ -254,4 +258,16 @@ app.listen(PORT, function () {
   console.log("TPA dashboard ouvindo na porta " + PORT);
   // Warm the cache on boot so the first visitor doesn't hit an empty dataset.
   doRefresh();
+
+  // Mantém os dados atualizados automaticamente enquanto o processo estiver
+  // no ar. No plano free do Render o serviço "dorme" após ficar sem receber
+  // requisições por um tempo; quando ele acorda, o doRefresh() do boot acima
+  // já cuida de trazer dados novos, e este intervalo retoma normalmente.
+  if (AUTO_REFRESH_MINUTES > 0) {
+    console.log("[refresh] auto-refresh ativado a cada " + AUTO_REFRESH_MINUTES + " min");
+    setInterval(function () {
+      console.log("[refresh] disparo automático (" + AUTO_REFRESH_MINUTES + " min)");
+      doRefresh();
+    }, AUTO_REFRESH_MINUTES * 60 * 1000);
+  }
 });
