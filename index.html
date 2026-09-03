@@ -1276,12 +1276,12 @@
 
   /* ================= KPI row ================= */
   function renderKPIs(rows, agg, scopeLabel, breachSlot, period){
-    var breachClickable = breachSlot != null && agg.breached_count > 0;
+    var breachClickable = agg.breached_count > 0;
     var pendingClickable = agg.pending_count > 0;
     var kpis = [
       { label:'Chamados', value: fmtInt(agg.ticket_count), unit:'', sub: scopeLabel },
       { label:'TPA médio', value: fmtMinShort(agg.avg), unit:'min', sub: 'mediana ' + fmtMinShort(agg.median) + ' min' },
-      { label:'Estouro de SLA', value: fmtMinShort(agg.breach_rate_pct), unit: agg.breach_rate_pct===null?'':'%', sub: statusFor(agg.breach_rate_pct).label, clickable: breachClickable, kind:'breach', slot: breachSlot, hint:'Ver chamados com estouro' },
+      { label:'Estouro de SLA', value: fmtMinShort(agg.breach_rate_pct), unit: agg.breach_rate_pct===null?'':'%', sub: fmtInt(agg.breached_count) + ' de ' + fmtInt(agg.ticket_count) + ' chamados · ' + statusFor(agg.breach_rate_pct).label, clickable: breachClickable, kind:'breach', slot: breachSlot, hint:'Ver chamados com estouro' },
       { label:'Pendentes de resposta', value: fmtInt(agg.pending_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: pendingClickable, kind:'pending', slot: breachSlot, hint:'Ver chamados pendentes' }
     ];
     document.getElementById('kpi-grid').innerHTML = kpis.map(function(k){
