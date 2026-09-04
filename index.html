@@ -385,6 +385,26 @@
   }
   button.toggle-btn:hover{ background:var(--accent-wash); color:var(--text-primary); }
 
+  .panel-head-actions{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  button.export-btn{
+    font-family:inherit;
+    font-size:12px;
+    font-weight:600;
+    color:#fff;
+    background:var(--accent);
+    border:1px solid var(--accent);
+    border-radius:6px;
+    padding:5px 12px;
+    cursor:pointer;
+    white-space:nowrap;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+  }
+  button.export-btn:hover{ filter:brightness(1.08); }
+  button.export-btn:disabled{ opacity:0.6; cursor:default; filter:none; }
+  button.export-btn svg{ width:13px; height:13px; flex-shrink:0; }
+
   /* ---------- Legend ---------- */
   .legend{
     display:flex;
@@ -675,7 +695,13 @@
         <p class="panel-title" id="breach-drilldown-title">Chamados com estouro de SLA</p>
         <p class="panel-desc" id="breach-drilldown-desc"></p>
       </div>
-      <button class="toggle-btn" id="breach-drilldown-close" type="button">Fechar ✕</button>
+      <div class="panel-head-actions">
+        <button class="export-btn" id="breach-drilldown-export" type="button">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.5v8.5m0 0L4.8 6.8M8 10l3.2-3.2M2.5 12v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Exportar Excel
+        </button>
+        <button class="toggle-btn" id="breach-drilldown-close" type="button">Fechar ✕</button>
+      </div>
     </div>
     <div class="table-scroll" id="breach-drilldown-table"></div>
   </div>
@@ -990,6 +1016,7 @@
 
   /* ================= SLA breach / pending drill-down ================= */
   var drilldownState = { kind: null, slot: null };
+  var lastDrilldownExport = null;
   function jiraUrl(key){ return 'https://' + META.site_host + '/browse/' + key; }
   function slotKey(slot){ return (slot === null || slot === undefined) ? 'all' : String(slot); }
   function isDrilldownActive(kind, slot){ return drilldownState.kind === kind && drilldownState.slot === slot; }
@@ -1006,6 +1033,7 @@
   function closeDrilldown(){
     drilldownState.kind = null;
     drilldownState.slot = null;
+    lastDrilldownExport = null;
     var wrap = document.getElementById('breach-drilldown-wrap');
     if (wrap) wrap.hidden = true;
     document.querySelectorAll('.status-row.active').forEach(function(r){ r.classList.remove('active'); r.setAttribute('aria-expanded','false'); });
@@ -1026,6 +1054,48 @@
       rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[3] === 1; });
       rows.sort(function(x,y){ return (y[2]||0) - (x[2]||0); }); // worst (longest) first
     }
+
+    var nowMsExport = Date.now();
+    var exportColumns, exportRows;
+    if (kind === 'pending'){
+      exportColumns = [{ header:'Chamado', key:'chamado', width:16 }];
+      if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
+      exportColumns.push(
+        { header:'Resumo', key:'resumo', width:55 },
+        { header:'Aberto em', key:'aberto', width:20 },
+        { header:'Aguardando há', key:'aguardando', width:16 }
+      );
+      exportRows = rows.map(function(r){
+        var rSlot = r[0], key = r[4], summary = r[5] || '';
+        var waitingMin = (nowMsExport - r[1]) / 60000;
+        var row = [key];
+        if (isAll) row.push(analystBySlot(rSlot).short);
+        row.push(summary, fmtDateFullBR(r[1]), fmtDurationShort(waitingMin));
+        return row;
+      });
+    } else {
+      exportColumns = [{ header:'Chamado', key:'chamado', width:16 }];
+      if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
+      exportColumns.push(
+        { header:'Resumo', key:'resumo', width:55 },
+        { header:'Aberto em', key:'aberto', width:20 },
+        { header:'TPA (min)', key:'tpa', width:14 },
+        { header:'Meta (min)', key:'meta', width:14 }
+      );
+      exportRows = rows.map(function(r){
+        var rSlot = r[0], key = r[4], summary = r[5] || '', goal = r[6];
+        var row = [key];
+        if (isAll) row.push(analystBySlot(rSlot).short);
+        row.push(summary, fmtDateFullBR(r[1]), (r[2] != null ? Math.round(r[2] * 10) / 10 : null), (goal != null ? Math.round(goal * 10) / 10 : null));
+        return row;
+      });
+    }
+    lastDrilldownExport = {
+      title: (kind === 'pending' ? 'Chamados pendentes de resposta' : 'Chamados com estouro de SLA') + ' - ' + scopeName,
+      filename: (kind === 'pending' ? 'pendentes_' : 'estouro_sla_') + slotKey(slot) + '_' + ymd(Date.now()) + '.xlsx',
+      columns: exportColumns,
+      rows: exportRows
+    };
 
     var wrap = document.getElementById('breach-drilldown-wrap');
     document.getElementById('breach-drilldown-title').textContent = kind === 'pending'
@@ -1097,6 +1167,36 @@
     wrap.scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
   document.getElementById('breach-drilldown-close').addEventListener('click', closeDrilldown);
+
+  document.getElementById('breach-drilldown-export').addEventListener('click', async function(){
+    if (!lastDrilldownExport) return;
+    var btn = this;
+    var originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Gerando…';
+    try {
+      var res = await fetch('/api/export/xlsx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lastDrilldownExport)
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = lastDrilldownExport.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    } catch (e){
+      alert('Não foi possível gerar a planilha: ' + (e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  });
 
   /* ================= header meta (recomputed on every data load) ================= */
   function applyDatasetMeta(){

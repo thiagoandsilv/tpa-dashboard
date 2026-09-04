@@ -2,6 +2,7 @@
 
 const express = require("express");
 const path = require("path");
+const ExcelJS = require("exceljs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -248,6 +249,83 @@ app.get("/api/status", function (req, res) {
     hasData: !!cache.meta,
     generated_at: cache.meta ? cache.meta.generated_at : null,
   });
+});
+
+// Gera uma planilha .xlsx formatada a partir de linhas já filtradas/ordenadas
+// no navegador (drill-downs de pendentes/estouro de SLA), para manter a
+// exportação sempre igual ao que está sendo exibido na tela.
+app.post("/api/export/xlsx", async function (req, res) {
+  try {
+    var body = req.body || {};
+    var title = String(body.title || "Exportação").slice(0, 90);
+    var columns = Array.isArray(body.columns) ? body.columns : [];
+    var rows = Array.isArray(body.rows) ? body.rows : [];
+    var filename = String(body.filename || "export.xlsx").replace(/[^a-zA-Z0-9_\-.]/g, "_");
+    if (!columns.length) {
+      return res.status(400).json({ error: "nenhuma coluna informada" });
+    }
+    if (rows.length > 20000) {
+      return res.status(400).json({ error: "muitas linhas para exportar" });
+    }
+
+    var workbook = new ExcelJS.Workbook();
+    workbook.creator = "TPA Dashboard - Central de Suporte Accerte";
+    workbook.created = new Date();
+
+    var sheetName = title.replace(/[\\/*?:[\]]/g, " ").slice(0, 31) || "Dados";
+    var sheet = workbook.addWorksheet(sheetName, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+
+    sheet.columns = columns.map(function (c) {
+      return { header: String(c.header || ""), key: String(c.key || c.header || ""), width: c.width || 20 };
+    });
+
+    rows.forEach(function (r) {
+      sheet.addRow(Array.isArray(r) ? r : columns.map(function (c) { return r[c.key]; }));
+    });
+
+    var headerRow = sheet.getRow(1);
+    headerRow.eachCell(function (cell) {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
+      cell.alignment = { vertical: "middle", horizontal: "left" };
+      cell.border = { bottom: { style: "thin", color: { argb: "FF000000" } } };
+    });
+    headerRow.height = 20;
+
+    for (var i = 2; i <= sheet.rowCount; i++) {
+      var row = sheet.getRow(i);
+      row.eachCell(function (cell) {
+        cell.border = { bottom: { style: "thin", color: { argb: "FFE5E7EB" } } };
+        cell.alignment = { vertical: "middle" };
+      });
+      if (i % 2 === 0) {
+        row.eachCell(function (cell) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+        });
+      }
+    }
+
+    if (columns.length) {
+      sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
+    }
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", 'attachment; filename="' + filename + '"');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("[export] falhou:", (err && err.message) || err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: (err && err.message) || String(err) });
+    } else {
+      res.end();
+    }
+  }
 });
 
 app.get(["/", "/index.html"], function (req, res) {
