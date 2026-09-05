@@ -162,6 +162,19 @@
   .refresh-status.ok{ color:var(--status-good); }
   .refresh-status.error{ color:var(--status-critical); }
 
+  .meta-actions{ display:flex; gap:8px; justify-content:flex-end; }
+  .meta-actions .refresh-btn{ margin-top:0; }
+  .alert-toggle-btn{
+    display:inline-flex; align-items:center; gap:6px;
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    color:var(--text-secondary); background:transparent;
+    border:1px solid var(--border-strong); border-radius:7px;
+    padding:8px 12px; cursor:pointer; white-space:nowrap; margin-top:8px;
+  }
+  .alert-toggle-btn:hover{ background:var(--accent-wash); color:var(--text-primary); }
+  .alert-toggle-btn.active{ background:var(--status-good); border-color:var(--status-good); color:#fff; }
+  .alert-toggle-btn svg{ width:14px; height:14px; flex:none; }
+
   /* ---------- Boot / loading overlay ---------- */
   .boot-overlay{
     position:fixed; inset:0; z-index:50;
@@ -385,7 +398,21 @@
   }
   button.toggle-btn:hover{ background:var(--accent-wash); color:var(--text-primary); }
 
-  .panel-head-actions{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .panel-head-actions{ display:flex; align-items:center; gap:8px; flex-shrink:0; position:relative; }
+  .export-popover{
+    position:absolute; top:calc(100% + 6px); right:0; z-index:20;
+    background:var(--surface-raised); border:1px solid var(--border-strong);
+    border-radius:8px; padding:12px; width:230px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.16);
+  }
+  .export-popover-title{ font-size:12px; font-weight:600; margin:0 0 8px; color:var(--text-secondary); }
+  .export-popover select, .export-popover input[type=date]{
+    width:100%; font-family:inherit; font-size:12.5px; padding:6px 8px;
+    border:1px solid var(--border-strong); border-radius:6px; background:var(--surface);
+    color:var(--text-primary); margin-bottom:8px;
+  }
+  .export-popover-dates label{ display:block; font-size:11px; color:var(--text-muted); margin-bottom:2px; }
+  .export-popover-dates{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
   button.export-btn{
     font-family:inherit;
     font-size:12px;
@@ -666,10 +693,16 @@
     <div class="meta-block">
       <div>Dados coletados até <span class="mono" id="generated-at">—</span></div>
       <div>Total na base: <span class="mono" id="dataset-total">—</span> chamados</div>
-      <button class="refresh-btn" id="refresh-btn" type="button" title="Busca os dados mais recentes direto no Jira">
-        <svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.89M13.5 2.5v3.5H10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Atualizar
-      </button>
+      <div class="meta-actions">
+        <button class="alert-toggle-btn" id="alert-toggle-btn" type="button" title="Tocar som e mostrar notificação quando um chamado entrar em estado crítico de SLA, mesmo com a aba em segundo plano">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.6c-.5 0-.9.4-.9.9v.5C4.8 3.4 3.1 5.3 3.1 7.7v2.5c0 .5-.2.9-.5 1.3l-.8.9c-.5.5-.1 1.4.6 1.4h11.2c.7 0 1.1-.9.6-1.4l-.8-.9c-.3-.4-.5-.8-.5-1.3V7.7c0-2.4-1.7-4.3-4-4.7v-.5c0-.5-.4-.9-.9-.9z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M6.3 14.1a1.7 1.7 0 0 0 3.4 0" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+          <span id="alert-toggle-label">Ativar alertas</span>
+        </button>
+        <button class="refresh-btn" id="refresh-btn" type="button" title="Busca os dados mais recentes direto no Jira">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.89M13.5 2.5v3.5H10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Atualizar
+        </button>
+      </div>
       <span id="refresh-status" class="refresh-status"></span>
     </div>
   </header>
@@ -761,6 +794,30 @@
           <p class="panel-title" id="summary-title">Resumo por analista</p>
           <p class="panel-desc" id="summary-desc">Detalhamento do período selecionado</p>
         </div>
+        <div class="panel-head-actions">
+          <button class="export-btn" id="summary-export-btn" type="button">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.5v8.5m0 0L4.8 6.8M8 10l3.2-3.2M2.5 12v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Exportar Excel
+          </button>
+          <div class="export-popover" id="summary-export-popover" hidden>
+            <p class="export-popover-title">Período da planilha</p>
+            <select id="summary-export-period">
+              <option value="today">Hoje</option>
+              <option value="yesterday">Ontem</option>
+              <option value="week">Esta semana</option>
+              <option value="lastweek">Última semana</option>
+              <option value="month">Este mês</option>
+              <option value="90d">Últimos 3 meses</option>
+              <option value="180d">Últimos 6 meses</option>
+              <option value="custom">Personalizado…</option>
+            </select>
+            <div id="summary-export-custom" class="export-popover-dates" hidden>
+              <label>De<input type="date" id="summary-export-from"></label>
+              <label>Até<input type="date" id="summary-export-to"></label>
+            </div>
+            <button class="export-btn" id="summary-export-confirm" type="button" style="width:100%; justify-content:center;">Baixar planilha</button>
+          </div>
+        </div>
       </div>
       <div class="table-scroll" id="summary-table-wrap"></div>
     </div>
@@ -774,6 +831,12 @@
         <div>
           <p class="panel-title">Chamados em risco de estouro (SLA de 30 min)</p>
           <p class="panel-desc" id="sla-desc">Chamados sem primeira resposta com meta de 30 minutos, ordenados do mais urgente para o menos urgente</p>
+        </div>
+        <div class="panel-head-actions">
+          <button class="export-btn" id="sla-export-btn" type="button">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.5v8.5m0 0L4.8 6.8M8 10l3.2-3.2M2.5 12v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Exportar Excel
+          </button>
         </div>
       </div>
       <div class="table-scroll" id="sla-table-wrap"></div>
@@ -1017,6 +1080,7 @@
   /* ================= SLA breach / pending drill-down ================= */
   var drilldownState = { kind: null, slot: null };
   var lastDrilldownExport = null;
+  var lastSlaExport = null;
   function jiraUrl(key){ return 'https://' + META.site_host + '/browse/' + key; }
   function slotKey(slot){ return (slot === null || slot === undefined) ? 'all' : String(slot); }
   function isDrilldownActive(kind, slot){ return drilldownState.kind === kind && drilldownState.slot === slot; }
@@ -1168,9 +1232,10 @@
   }
   document.getElementById('breach-drilldown-close').addEventListener('click', closeDrilldown);
 
-  document.getElementById('breach-drilldown-export').addEventListener('click', async function(){
-    if (!lastDrilldownExport) return;
-    var btn = this;
+  // Gera e baixa uma planilha .xlsx a partir de um dataset {title, filename, columns, rows}
+  // já pronto no navegador. Reaproveitado por todos os botões "Exportar Excel" do dashboard.
+  async function requestXlsxExport(dataset, btn){
+    if (!dataset) return;
     var originalHtml = btn.innerHTML;
     btn.disabled = true;
     btn.textContent = 'Gerando…';
@@ -1178,14 +1243,14 @@
       var res = await fetch('/api/export/xlsx', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(lastDrilldownExport)
+        body: JSON.stringify(dataset)
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var blob = await res.blob();
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = lastDrilldownExport.filename;
+      a.download = dataset.filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1196,6 +1261,10 @@
       btn.disabled = false;
       btn.innerHTML = originalHtml;
     }
+  }
+
+  document.getElementById('breach-drilldown-export').addEventListener('click', function(){
+    requestXlsxExport(lastDrilldownExport, this);
   });
 
   /* ================= header meta (recomputed on every data load) ================= */
@@ -1416,24 +1485,107 @@
     if (slaTickerHandle){ clearInterval(slaTickerHandle); slaTickerHandle = null; }
   }
 
-  // Faz a aba "SLA" piscar (mesmo com outra aba aberta) quando houver algum
-  // chamado pendente de primeira resposta a 5 minutos ou menos de estourar a
-  // meta de 30 min — ou já estourado. Roda independente da aba ativa.
-  function slaTabHasAlert(){
+  // ---- Alertas sonoros/notificação para chamados críticos de SLA ----------
+  // Ativados manualmente (exige gesto do usuário p/ pedir permissão de
+  // notificação do navegador). Uma vez ativados, tocam um bipe e mostram uma
+  // notificação do sistema — funciona mesmo com a aba em segundo plano/
+  // minimizada — sempre que um chamado ENTRA em estado crítico (≤5 min ou
+  // já estourado). Cada chamado só notifica uma vez por entrada em crise.
+  var alertsEnabled = false;
+  var notifiedCriticalKeys = {};
+  var alertToggleBtn = document.getElementById('alert-toggle-btn');
+  var alertToggleLabel = document.getElementById('alert-toggle-label');
+
+  function playAlertSound(){
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      var ctx = new Ctx();
+      function beep(freq, startOffset){
+        var o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        o.connect(g); g.connect(ctx.destination);
+        var t = ctx.currentTime + startOffset;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.28, t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+        o.start(t); o.stop(t + 0.4);
+      }
+      beep(880, 0);
+      beep(660, 0.22);
+    } catch (e){ /* ignore: áudio bloqueado pelo navegador */ }
+  }
+
+  function notifyCriticalTicket(key, summary, msg){
+    if (!alertsEnabled) return;
+    playAlertSound();
+    if ('Notification' in window && Notification.permission === 'granted'){
+      try {
+        var n = new Notification('SLA crítico — ' + key, {
+          body: (summary ? summary + '\n' : '') + msg,
+          tag: 'sla-' + key
+        });
+        n.onclick = function(){ try { window.focus(); n.close(); } catch(e){} };
+      } catch (e){ /* ignore */ }
+    }
+  }
+
+  function setAlertsEnabled(v){
+    alertsEnabled = v;
+    if (alertToggleBtn) alertToggleBtn.classList.toggle('active', v);
+    if (alertToggleLabel) alertToggleLabel.textContent = v ? 'Alertas ativados' : 'Ativar alertas';
+    try { localStorage.setItem('tpa_alerts_enabled', v ? '1' : '0'); } catch (e){ /* ignore */ }
+  }
+
+  if (alertToggleBtn){
+    alertToggleBtn.addEventListener('click', async function(){
+      if (alertsEnabled){ setAlertsEnabled(false); return; }
+      if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied'){
+        try { await Notification.requestPermission(); } catch (e){ /* ignore */ }
+      }
+      playAlertSound(); // confirma pro usuário que o som funciona
+      setAlertsEnabled(true);
+    });
+    try { if (localStorage.getItem('tpa_alerts_enabled') === '1') setAlertsEnabled(true); } catch (e){ /* ignore */ }
+  }
+
+  // Faz a aba "SLA" piscar (mesmo com outra aba aberta) e dispara alertas
+  // quando houver algum chamado pendente de primeira resposta a 5 minutos ou
+  // menos de estourar a meta de 30 min — ou já estourado. Roda independente
+  // da aba ativa.
+  function checkSlaAlerts(){
     var now = Date.now();
+    var stillCritical = {};
+    var hasAlert = false;
     for (var i = 0; i < TICKETS.length; i++){
       var r = TICKETS[i];
       if (r[7] != null && r[2] === null && Math.round(r[6]) === 30){
         var remMin = (r[7] - now) / 60000;
-        if (remMin <= 5) return true;
+        if (remMin <= 5){
+          hasAlert = true;
+          var key = r[4];
+          stillCritical[key] = true;
+          if (!notifiedCriticalKeys[key]){
+            notifiedCriticalKeys[key] = true;
+            var msg = remMin <= 0
+              ? 'Chamado estourou o SLA de 30 min de primeira resposta.'
+              : 'Restam ' + Math.max(0, Math.round(remMin)) + ' min para estourar o SLA de 30 min.';
+            notifyCriticalTicket(key, r[5], msg);
+          }
+        }
       }
     }
-    return false;
+    // libera a chave quando o chamado deixa de estar crítico (foi respondido
+    // ou saiu da base), para poder notificar de novo se voltar a acontecer
+    Object.keys(notifiedCriticalKeys).forEach(function(k){
+      if (!stillCritical[k]) delete notifiedCriticalKeys[k];
+    });
+    return hasAlert;
   }
   function updateSlaTabAlert(){
     var btn = document.querySelector('.tab-btn-sla');
     if (!btn) return;
-    btn.classList.toggle('tab-btn-sla-alert', slaTabHasAlert());
+    btn.classList.toggle('tab-btn-sla-alert', checkSlaAlerts());
   }
   setInterval(updateSlaTabAlert, 20000);
 
@@ -1477,6 +1629,29 @@
       '<span class="sla-live-dot"></span>Atualizado ao vivo a cada 20s · ' + fmtInt(rows.length) +
       ' chamado(s) pendente(s) com meta de 30 minutos, do mais urgente para o menos urgente';
 
+    lastSlaExport = {
+      title: 'Chamados em risco de estouro de SLA (meta 30 min)',
+      filename: 'sla_risco_' + ymd(now) + '.xlsx',
+      columns: [
+        { header:'Analista', key:'analista', width:24 },
+        { header:'Chamado', key:'chamado', width:16 },
+        { header:'Resumo', key:'resumo', width:55 },
+        { header:'Aberto em', key:'aberto', width:20 },
+        { header:'Aguardando há', key:'aguardando', width:16 },
+        { header:'Tempo restante', key:'restante', width:18 },
+        { header:'Status', key:'status', width:14 }
+      ],
+      rows: rows.map(function(r){
+        var slot = r[0], createdMs = r[1], key = r[4], summary = r[5] || '', breachMs = r[7];
+        var a = analystBySlot(slot);
+        var remMin = (breachMs - now) / 60000;
+        var st = slaRiskStatus(remMin);
+        var remText = remMin <= 0 ? 'estourado há ' + fmtDurationShort(-remMin) : 'restam ' + fmtDurationShort(remMin);
+        var waitingText = fmtDurationShort((now - createdMs) / 60000);
+        return [(a ? a.short : '—'), key, summary, fmtDateFullBR(createdMs), waitingText, remText, st.label];
+      })
+    };
+
     var tableEl = document.getElementById('sla-table-wrap');
     if (!rows.length){
       tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>Nenhum chamado pendente com meta de 30 minutos no momento.</p></div>';
@@ -1505,6 +1680,9 @@
       '<th style="text-align:left">Analista</th><th style="text-align:left">Chamado</th><th style="text-align:left">Resumo</th><th>Aberto em</th><th>Aguardando há</th><th>Tempo restante</th><th>Status</th>' +
       '</tr></thead><tbody>'+body+'</tbody></table>';
   }
+  document.getElementById('sla-export-btn').addEventListener('click', function(){
+    requestXlsxExport(lastSlaExport, this);
+  });
 
   /* ================= overview charts ================= */
   function renderOverviewCharts(rowsAll, period){
@@ -1587,6 +1765,88 @@
       el.addEventListener('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); e.stopPropagation(); activate(); } });
     });
   }
+
+  // ---- Exportação do resumo por analista com período próprio -------------
+  // Independente do filtro de período mostrado na tela: abre um pequeno
+  // seletor (mesmas opções + personalizado) só para a planilha exportada.
+  (function setupSummaryExport(){
+    var btn = document.getElementById('summary-export-btn');
+    var popover = document.getElementById('summary-export-popover');
+    var periodSel = document.getElementById('summary-export-period');
+    var customWrap = document.getElementById('summary-export-custom');
+    var fromInput = document.getElementById('summary-export-from');
+    var toInput = document.getElementById('summary-export-to');
+    var confirmBtn = document.getElementById('summary-export-confirm');
+    if (!btn || !popover) return;
+
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      var opening = popover.hidden;
+      popover.hidden = !opening;
+      if (opening){
+        periodSel.value = state.period === 'custom' ? 'custom' : state.period;
+        customWrap.hidden = periodSel.value !== 'custom';
+        var minD = ymd(datasetMin), maxD = ymd(datasetMax);
+        fromInput.min = minD; fromInput.max = maxD;
+        toInput.min = minD; toInput.max = maxD;
+        fromInput.value = state.customFrom || fromInput.value || minD;
+        toInput.value = state.customTo || toInput.value || maxD;
+      }
+    });
+    document.addEventListener('click', function(e){
+      if (!popover.hidden && !popover.contains(e.target) && e.target !== btn){
+        popover.hidden = true;
+      }
+    });
+    periodSel.addEventListener('change', function(){
+      customWrap.hidden = periodSel.value !== 'custom';
+    });
+
+    confirmBtn.addEventListener('click', function(){
+      var chosen = periodSel.value;
+      if (chosen === 'custom' && (!fromInput.value || !toInput.value)){
+        alert('Escolha as duas datas (de/até) para o período personalizado.');
+        return;
+      }
+      var period = computePeriod({ period: chosen, customFrom: fromInput.value, customTo: toInput.value });
+      var slotFilter = state.analyst === 'all' ? null : state.analyst;
+      var rowsScope = filterTickets(period.from, period.to, slotFilter);
+      var list = slotFilter ? [analystBySlot(slotFilter)] : ANALYSTS;
+      var exportRows = list.map(function(a){
+        var agg = aggregate(rowsScope.filter(function(r){ return r[0] === a.slot; }));
+        var st = statusFor(agg.breach_rate_pct);
+        return [
+          a.name,
+          agg.ticket_count,
+          agg.pending_count,
+          agg.avg != null ? Math.round(agg.avg * 10) / 10 : null,
+          agg.median != null ? Math.round(agg.median * 10) / 10 : null,
+          agg.p90 != null ? Math.round(agg.p90 * 10) / 10 : null,
+          agg.breached_count,
+          agg.breach_rate_pct != null ? Math.round(agg.breach_rate_pct * 10) / 10 : null,
+          st.label
+        ];
+      });
+      var dataset = {
+        title: 'Resumo por analista - ' + period.label,
+        filename: 'resumo_analistas_' + ymd(Date.now()) + '.xlsx',
+        columns: [
+          { header:'Analista', key:'analista', width:24 },
+          { header:'Chamados', key:'chamados', width:12 },
+          { header:'Pendentes', key:'pendentes', width:12 },
+          { header:'TPA médio (min)', key:'tpaMedio', width:16 },
+          { header:'TPA mediano (min)', key:'tpaMediano', width:18 },
+          { header:'TPA p90 (min)', key:'tpaP90', width:14 },
+          { header:'Estouros', key:'estouros', width:12 },
+          { header:'Taxa de estouro (%)', key:'taxa', width:18 },
+          { header:'Status', key:'status', width:14 }
+        ],
+        rows: exportRows
+      };
+      popover.hidden = true;
+      requestXlsxExport(dataset, btn);
+    });
+  })();
 
   /* ================= trend chart (generic, 1..N series + optional dashed reference) ================= */
   var svgW = 1080, svgH = 300, padL = 44, padR = 34, padT = 16, padB = 30;
