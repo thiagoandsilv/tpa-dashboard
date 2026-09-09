@@ -348,6 +348,27 @@
     color:var(--text-muted);
     margin-top:8px;
   }
+  .kpi-delta-line{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid var(--gridline);
+  }
+  .kpi-delta{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:-0.01em;
+  }
+  .kpi-delta.good{ color:var(--status-good); }
+  .kpi-delta.bad{ color:var(--status-critical); }
+  .kpi-delta.flat{ color:var(--text-muted); }
+  .kpi-delta-label{
+    font-size:11px;
+    color:var(--text-muted);
+  }
 
   /* ---------- Panels ---------- */
   .panel{
@@ -501,6 +522,37 @@
     font-weight:600;
   }
   .bar-value .u{ font-size:10.5px; font-weight:500; color:var(--text-muted); margin-left:4px; }
+
+  /* ---------- Hour × weekday heatmap ---------- */
+  .heatmap-wrap{ overflow-x:auto; }
+  .heatmap-grid{
+    display:grid;
+    grid-template-columns:44px repeat(24, minmax(21px, 1fr));
+    gap:3px;
+    min-width:660px;
+  }
+  .heatmap-corner{ }
+  .heatmap-hour-label{
+    font-size:9.5px;
+    font-family:"IBM Plex Mono", monospace;
+    color:var(--text-muted);
+    text-align:center;
+    align-self:end;
+    padding-bottom:2px;
+  }
+  .heatmap-day-label{
+    font-size:11.5px;
+    font-weight:500;
+    color:var(--text-secondary);
+    display:flex;
+    align-items:center;
+  }
+  .heatmap-cell{
+    aspect-ratio:1;
+    min-height:18px;
+    border-radius:3px;
+    border:1px solid var(--border);
+  }
 
   /* ---------- Status bar chart (breach rate) ---------- */
   .status-row{
@@ -771,6 +823,26 @@
         <div id="status-chart"></div>
       </div>
     </section>
+
+    <div class="panel" id="tpa-distribution-panel">
+      <div class="panel-head">
+        <div>
+          <p class="panel-title">Distribuição do TPA</p>
+          <p class="panel-desc">Chamados respondidos, agrupados por faixa de tempo até a primeira resposta</p>
+        </div>
+      </div>
+      <div id="tpa-distribution-chart"></div>
+    </div>
+
+    <div class="panel" id="heatmap-panel">
+      <div class="panel-head">
+        <div>
+          <p class="panel-title">Volume por dia e horário</p>
+          <p class="panel-desc">Quando os chamados chegam — quanto mais escuro, mais chamados abertos naquele horário (passe o mouse para ver o TPA médio)</p>
+        </div>
+      </div>
+      <div class="heatmap-wrap"><div class="heatmap-grid" id="heatmap-grid"></div></div>
+    </div>
 
     <div class="panel">
       <div class="panel-head">
@@ -1444,21 +1516,51 @@
   bootRetry.addEventListener('click', initialLoad);
 
   /* ================= KPI row ================= */
-  function renderKPIs(rows, agg, scopeLabel, breachSlot, period){
+  // Formata a variação de um indicador em relação ao período anterior de
+  // mesma duração. mode indica se um valor menor é bom, maior é bom, ou é
+  // neutro (só informativo, sem julgamento de cor); points mostra a diferença
+  // em pontos percentuais em vez de variação relativa (melhor pra taxas).
+  function kpiDeltaHtml(cur, prev, opts){
+    opts = opts || {};
+    if (cur === null || cur === undefined || prev === null || prev === undefined) return '';
+    var diff = cur - prev;
+    if (prev === 0 && cur === 0) return '';
+    var text;
+    if (opts.points){
+      text = (diff > 0 ? '+' : '') + diff.toFixed(1).replace('.', ',') + ' p.p.';
+    } else if (prev !== 0){
+      var pct = diff / prev * 100;
+      text = (pct > 0 ? '+' : '') + pct.toFixed(0) + '%';
+    } else {
+      text = (diff > 0 ? '+' : '') + fmtInt(diff);
+    }
+    var mode = opts.mode || 'neutral';
+    var isGood = mode === 'neutral' ? null : (mode === 'lowerBetter' ? diff < 0 : diff > 0);
+    var cls = Math.abs(diff) < 1e-9 ? 'flat' : (isGood === null ? 'flat' : (isGood ? 'good' : 'bad'));
+    var arrow = diff > 1e-9 ? '▲' : (diff < -1e-9 ? '▼' : '●');
+    return '<div class="kpi-delta-line"><span class="kpi-delta '+cls+'">'+arrow+' '+text+'</span><span class="kpi-delta-label">vs. período anterior</span></div>';
+  }
+
+  function renderKPIs(rows, agg, scopeLabel, breachSlot, period, aggPrev){
     var breachClickable = agg.breached_count > 0;
     var pendingClickable = agg.pending_count > 0;
+    var deltaCount = aggPrev ? kpiDeltaHtml(agg.ticket_count, aggPrev.ticket_count, {mode:'neutral'}) : '';
+    var deltaAvg = aggPrev ? kpiDeltaHtml(agg.avg, aggPrev.avg, {mode:'lowerBetter'}) : '';
+    var deltaBreach = aggPrev ? kpiDeltaHtml(agg.breach_rate_pct, aggPrev.breach_rate_pct, {mode:'lowerBetter', points:true}) : '';
+    var deltaPending = aggPrev ? kpiDeltaHtml(agg.pending_count, aggPrev.pending_count, {mode:'lowerBetter'}) : '';
     var kpis = [
-      { label:'Chamados', value: fmtInt(agg.ticket_count), unit:'', sub: scopeLabel },
-      { label:'TPA médio', value: fmtMinShort(agg.avg), unit:'min', sub: 'mediana ' + fmtMinShort(agg.median) + ' min' },
-      { label:'Estouro de SLA', value: fmtMinShort(agg.breach_rate_pct), unit: agg.breach_rate_pct===null?'':'%', sub: fmtInt(agg.breached_count) + ' de ' + fmtInt(agg.ticket_count) + ' chamados · ' + statusFor(agg.breach_rate_pct).label, clickable: breachClickable, kind:'breach', slot: breachSlot, hint:'Ver chamados com estouro' },
-      { label:'Pendentes de resposta', value: fmtInt(agg.pending_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: pendingClickable, kind:'pending', slot: breachSlot, hint:'Ver chamados pendentes' }
+      { label:'Chamados', value: fmtInt(agg.ticket_count), unit:'', sub: scopeLabel, delta: deltaCount },
+      { label:'TPA médio', value: fmtMinShort(agg.avg), unit:'min', sub: 'mediana ' + fmtMinShort(agg.median) + ' min', delta: deltaAvg },
+      { label:'Estouro de SLA', value: fmtMinShort(agg.breach_rate_pct), unit: agg.breach_rate_pct===null?'':'%', sub: fmtInt(agg.breached_count) + ' de ' + fmtInt(agg.ticket_count) + ' chamados · ' + statusFor(agg.breach_rate_pct).label, clickable: breachClickable, kind:'breach', slot: breachSlot, hint:'Ver chamados com estouro', delta: deltaBreach },
+      { label:'Pendentes de resposta', value: fmtInt(agg.pending_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: pendingClickable, kind:'pending', slot: breachSlot, hint:'Ver chamados pendentes', delta: deltaPending }
     ];
     document.getElementById('kpi-grid').innerHTML = kpis.map(function(k){
       var cls = 'kpi-tile' + (k.clickable ? ' clickable' : '');
       var attr = k.clickable ? ' data-kind="'+k.kind+'" data-slot="'+slotKey(k.slot)+'" tabindex="0" role="button" title="'+k.hint+'"' : '';
       return '<div class="'+cls+'"'+attr+'><p class="kpi-label">'+k.label+'</p>' +
         '<div class="kpi-value num">'+k.value + (k.unit ? '<span class="unit">'+k.unit+'</span>' : '') + '</div>' +
-        '<p class="kpi-sub">'+k.sub+(k.clickable?' · ver chamados':'')+'</p></div>';
+        '<p class="kpi-sub">'+k.sub+(k.clickable?' · ver chamados':'')+'</p>' +
+        (k.delta || '') + '</div>';
     }).join('');
     document.querySelectorAll('.kpi-tile.clickable').forEach(function(tile){
       var kind = tile.getAttribute('data-kind');
@@ -1724,6 +1826,76 @@
       row.addEventListener('click', activate);
       row.addEventListener('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); } });
     });
+
+    renderTpaDistribution(rowsAll);
+    renderHeatmap(rowsAll);
+  }
+
+  /* ---- Distribuição do TPA: histograma de chamados respondidos por faixa
+     de tempo até a primeira resposta, no período selecionado. ---- */
+  function renderTpaDistribution(rowsAll){
+    var buckets = [
+      { label:'0–5 min',  min:0,   max:5,        color:'--status-good' },
+      { label:'5–15 min', min:5,   max:15,       color:'--status-good' },
+      { label:'15–30 min',min:15,  max:30,       color:'--status-warning' },
+      { label:'30–60 min',min:30,  max:60,       color:'--status-serious' },
+      { label:'1–2 h',    min:60,  max:120,      color:'--status-serious' },
+      { label:'2 h+',     min:120, max:Infinity, color:'--status-critical' }
+    ];
+    var responded = rowsAll.filter(function(r){ return r[2] !== null; });
+    var counts = buckets.map(function(b){
+      return responded.filter(function(r){ return r[2] >= b.min && r[2] < b.max; }).length;
+    });
+    var total = responded.length;
+    var maxCount = Math.max.apply(null, counts.concat([1]));
+    document.getElementById('tpa-distribution-chart').innerHTML = total ? buckets.map(function(b, i){
+      var pct = counts[i] ? Math.max(3, (counts[i] / maxCount) * 100) : 0;
+      var share = total ? (counts[i] / total * 100) : 0;
+      return '<div class="bar-row">' +
+        '<div class="bar-name">'+b.label+'</div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%; background:var('+b.color+')"></div></div>' +
+        '<div class="bar-value num">'+fmtInt(counts[i])+'<span class="u">'+fmtPct(share)+'</span></div>' +
+        '</div>';
+    }).join('') : '<div class="empty-state"><p>Sem respostas registradas no período.</p></div>';
+  }
+
+  /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
+     em horário de Brasília (fixo UTC-3, sem DST desde 2019). Ajuda a ver os
+     picos de demanda pra planejar escala/plantão. ---- */
+  function renderHeatmap(rowsAll){
+    var dayNames = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+    var grid = [];
+    for (var d = 0; d < 7; d++){
+      var row = [];
+      for (var h = 0; h < 24; h++){ row.push({ count:0, sumMin:0, respondedCount:0 }); }
+      grid.push(row);
+    }
+    rowsAll.forEach(function(r){
+      var localMs = r[1] - 3*3600000; // Brasília = UTC-3, sem horário de verão desde 2019
+      var dt = new Date(localMs);
+      var cell = grid[dt.getUTCDay()][dt.getUTCHours()];
+      cell.count++;
+      if (r[2] !== null){ cell.sumMin += r[2]; cell.respondedCount++; }
+    });
+    var maxCount = 0;
+    grid.forEach(function(row){ row.forEach(function(c){ if (c.count > maxCount) maxCount = c.count; }); });
+
+    var headerHtml = '<div class="heatmap-corner"></div>' + Array.from({ length:24 }, function(_, h){
+      return '<div class="heatmap-hour-label">'+(h % 3 === 0 ? h : '')+'</div>';
+    }).join('');
+
+    var bodyHtml = dayNames.map(function(name, dow){
+      var cells = grid[dow].map(function(c, hour){
+        var intensity = maxCount ? c.count / maxCount : 0;
+        var bg = c.count ? 'color-mix(in srgb, var(--accent) ' + Math.round(12 + intensity * 78) + '%, var(--surface-raised))' : 'var(--surface-raised)';
+        var avgTxt = c.respondedCount ? fmtMinShort(c.sumMin / c.respondedCount) + ' min' : '—';
+        var title = name + ' ' + String(hour).padStart(2,'0') + 'h: ' + fmtInt(c.count) + ' chamado(s) · TPA médio ' + avgTxt;
+        return '<div class="heatmap-cell" style="background:'+bg+'" title="'+escapeHtml(title)+'"></div>';
+      }).join('');
+      return '<div class="heatmap-day-label">'+name+'</div>' + cells;
+    }).join('');
+
+    document.getElementById('heatmap-grid').innerHTML = headerHtml + bodyHtml;
   }
 
   /* ================= summary table ================= */
@@ -2058,12 +2230,19 @@
     var rowsScope = filterTickets(period.from, period.to, state.analyst === 'all' ? null : state.analyst);
     var aggScope = aggregate(rowsScope);
 
+    // Período anterior de mesma duração, pra comparação (deltas nos KPIs).
+    var periodSpanMs = period.to - period.from;
+    var prevFrom = period.from - periodSpanMs - 1;
+    var prevTo = period.from - 1;
+    var rowsPrev = filterTickets(prevFrom, prevTo, state.analyst === 'all' ? null : state.analyst);
+    var aggPrev = aggregate(rowsPrev);
+
     var emptyWrap = document.getElementById('empty-state-wrap');
     var contentWrap = document.getElementById('content-wrap');
     var kpiGrid = document.getElementById('kpi-grid');
 
     var breachSlot = state.analyst === 'all' ? null : state.analyst;
-    renderKPIs(rowsScope, aggScope, scopeLabel, breachSlot, period);
+    renderKPIs(rowsScope, aggScope, scopeLabel, breachSlot, period, aggPrev);
 
     if (aggScope.ticket_count === 0){
       emptyWrap.hidden = false;
@@ -2092,8 +2271,13 @@
 
     var gLabel = granularity === 'day' ? 'diária' : granularity === 'week' ? 'semanal' : 'mensal';
 
+    var tpaDistributionPanel = document.getElementById('tpa-distribution-panel');
+    var heatmapPanel = document.getElementById('heatmap-panel');
+
     if (state.analyst === 'all'){
       overviewCharts.hidden = false;
+      tpaDistributionPanel.hidden = false;
+      heatmapPanel.hidden = false;
       renderOverviewCharts(rowsScope, period);
 
       trendTitle.textContent = 'Tendência ' + gLabel + ' do TPA';
@@ -2110,6 +2294,8 @@
       renderSummaryTable(rowsScope, null, period);
     } else {
       overviewCharts.hidden = true;
+      tpaDistributionPanel.hidden = true;
+      heatmapPanel.hidden = true;
 
       var a = analystBySlot(state.analyst);
       trendTitle.textContent = 'Tendência ' + gLabel + ' — ' + a.short;
