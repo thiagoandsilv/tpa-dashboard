@@ -553,6 +553,22 @@
     border-radius:3px;
     border:1px solid var(--border);
   }
+  .heatmap-legend{
+    margin:14px 0 0;
+    align-items:center;
+    gap:8px;
+  }
+  .heatmap-legend-label{
+    font-size:11.5px;
+    color:var(--text-muted);
+  }
+  .heatmap-legend-scale{
+    width:120px;
+    height:12px;
+    border-radius:3px;
+    border:1px solid var(--border);
+    background:linear-gradient(to right, var(--surface-raised), var(--accent));
+  }
 
   /* ---------- Status bar chart (breach rate) ---------- */
   .status-row{
@@ -838,10 +854,15 @@
       <div class="panel-head">
         <div>
           <p class="panel-title">Volume por dia e horário</p>
-          <p class="panel-desc">Quando os chamados chegam — quanto mais escuro, mais chamados abertos naquele horário (passe o mouse para ver o TPA médio)</p>
+          <p class="panel-desc">Quando os chamados chegam, nos últimos 90 dias (não muda com o filtro de período acima) — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio</p>
         </div>
       </div>
       <div class="heatmap-wrap"><div class="heatmap-grid" id="heatmap-grid"></div></div>
+      <div class="legend heatmap-legend">
+        <span class="heatmap-legend-label">Menos chamados</span>
+        <span class="heatmap-legend-scale" aria-hidden="true"></span>
+        <span class="heatmap-legend-label">Mais chamados</span>
+      </div>
     </div>
 
     <div class="panel">
@@ -1828,7 +1849,7 @@
     });
 
     renderTpaDistribution(rowsAll);
-    renderHeatmap(rowsAll);
+    renderHeatmap();
   }
 
   /* ---- Distribuição do TPA: histograma de chamados respondidos por faixa
@@ -1861,8 +1882,17 @@
 
   /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
      em horário de Brasília (fixo UTC-3, sem DST desde 2019). Ajuda a ver os
-     picos de demanda pra planejar escala/plantão. ---- */
-  function renderHeatmap(rowsAll){
+     picos de demanda pra planejar escala/plantão.
+     Usa uma janela fixa (últimos 90 dias), independente do filtro de período
+     escolhido lá em cima — um filtro curto (ex.: "Esta semana") deixaria a
+     maioria dos dias/horas em branco só por ainda não terem acontecido, o
+     que esconderia o padrão real de chegada de chamados. ---- */
+  var HEATMAP_WINDOW_DAYS = 90;
+  function renderHeatmap(){
+    var now = Date.now();
+    var from = now - HEATMAP_WINDOW_DAYS * 86400000;
+    var rows = TICKETS.filter(function(t){ return t[1] >= from && t[1] <= now; });
+
     var dayNames = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
     var grid = [];
     for (var d = 0; d < 7; d++){
@@ -1870,7 +1900,7 @@
       for (var h = 0; h < 24; h++){ row.push({ count:0, sumMin:0, respondedCount:0 }); }
       grid.push(row);
     }
-    rowsAll.forEach(function(r){
+    rows.forEach(function(r){
       var localMs = r[1] - 3*3600000; // Brasília = UTC-3, sem horário de verão desde 2019
       var dt = new Date(localMs);
       var cell = grid[dt.getUTCDay()][dt.getUTCHours()];
@@ -1886,8 +1916,11 @@
 
     var bodyHtml = dayNames.map(function(name, dow){
       var cells = grid[dow].map(function(c, hour){
-        var intensity = maxCount ? c.count / maxCount : 0;
-        var bg = c.count ? 'color-mix(in srgb, var(--accent) ' + Math.round(12 + intensity * 78) + '%, var(--surface-raised))' : 'var(--surface-raised)';
+        // raiz quadrada em vez de escala linear: com poucos horários de pico
+        // e muitos de baixo volume, isso separa melhor os tons "baixo/médio"
+        // em vez de deixar quase tudo claro e só o pico bem escuro.
+        var intensity = maxCount ? Math.sqrt(c.count / maxCount) : 0;
+        var bg = c.count ? 'color-mix(in srgb, var(--accent) ' + Math.round(15 + intensity * 75) + '%, var(--surface-raised))' : 'var(--surface-raised)';
         var avgTxt = c.respondedCount ? fmtMinShort(c.sumMin / c.respondedCount) + ' min' : '—';
         var title = name + ' ' + String(hour).padStart(2,'0') + 'h: ' + fmtInt(c.count) + ' chamado(s) · TPA médio ' + avgTxt;
         return '<div class="heatmap-cell" style="background:'+bg+'" title="'+escapeHtml(title)+'"></div>';
