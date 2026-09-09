@@ -286,6 +286,8 @@
   }
   .pill-btn.active{ background:var(--text-primary); color:var(--page); }
   .pill-btn:not(.active):hover{ background:var(--accent-wash); color:var(--text-primary); }
+  .pill-group-sm{ padding:2px; }
+  .pill-group-sm .pill-btn{ font-size:12px; padding:5px 9px; }
 
   .date-range{
     display:flex;
@@ -854,7 +856,13 @@
       <div class="panel-head">
         <div>
           <p class="panel-title">Volume por dia e horário</p>
-          <p class="panel-desc">Quando os chamados chegam, nos últimos 90 dias (não muda com o filtro de período acima) — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio</p>
+          <p class="panel-desc" id="heatmap-desc">Quando os chamados chegam, nos últimos 90 dias (não muda com o filtro de período acima) — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio</p>
+        </div>
+        <div class="panel-head-actions">
+          <div class="pill-group pill-group-sm" id="heatmap-window-group" role="group" aria-label="Janela do mapa de calor">
+            <button type="button" class="pill-btn active" data-window="90">90 dias</button>
+            <button type="button" class="pill-btn" data-window="180">6 meses</button>
+          </div>
         </div>
       </div>
       <div class="heatmap-wrap"><div class="heatmap-grid" id="heatmap-grid"></div></div>
@@ -1883,15 +1891,31 @@
   /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
      em horário de Brasília (fixo UTC-3, sem DST desde 2019). Ajuda a ver os
      picos de demanda pra planejar escala/plantão.
-     Usa uma janela fixa (últimos 90 dias), independente do filtro de período
-     escolhido lá em cima — um filtro curto (ex.: "Esta semana") deixaria a
-     maioria dos dias/horas em branco só por ainda não terem acontecido, o
-     que esconderia o padrão real de chegada de chamados. ---- */
-  var HEATMAP_WINDOW_DAYS = 90;
+     Usa uma janela fixa (90 dias ou 6 meses, à escolha), independente do
+     filtro de período escolhido lá em cima — um filtro curto (ex.: "Esta
+     semana") deixaria a maioria dos dias/horas em branco só por ainda não
+     terem acontecido, o que esconderia o padrão real de chegada de chamados. ---- */
+  var heatmapWindowDays = 90;
+  (function setupHeatmapWindowToggle(){
+    var group = document.getElementById('heatmap-window-group');
+    if (!group) return;
+    group.querySelectorAll('.pill-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        heatmapWindowDays = parseInt(btn.getAttribute('data-window'), 10);
+        group.querySelectorAll('.pill-btn').forEach(function(b){ b.classList.toggle('active', b === btn); });
+        renderHeatmap();
+      });
+    });
+  })();
   function renderHeatmap(){
     var now = Date.now();
-    var from = now - HEATMAP_WINDOW_DAYS * 86400000;
+    var from = now - heatmapWindowDays * 86400000;
     var rows = TICKETS.filter(function(t){ return t[1] >= from && t[1] <= now; });
+    var descEl = document.getElementById('heatmap-desc');
+    if (descEl){
+      var windowLabel = heatmapWindowDays === 90 ? 'últimos 90 dias' : 'últimos 6 meses';
+      descEl.textContent = 'Quando os chamados chegam, nos ' + windowLabel + ' (não muda com o filtro de período acima) — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio';
+    }
 
     var dayNames = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
     var grid = [];
