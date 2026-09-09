@@ -524,6 +524,17 @@
     font-weight:600;
   }
   .bar-value .u{ font-size:10.5px; font-weight:500; color:var(--text-muted); margin-left:4px; }
+  .bar-row.clickable{
+    grid-template-columns:168px 1fr 78px 16px;
+    margin:0 -6px;
+    padding:9px 6px;
+    border-radius:6px;
+    cursor:pointer;
+  }
+  .bar-row.clickable:hover{ background:var(--accent-wash); }
+  .bar-row.clickable.active{ background:var(--accent-wash); }
+  .bar-row.clickable .chevron{ color:var(--text-muted); font-size:11px; text-align:center; transition:transform 0.12s ease; }
+  .bar-row.clickable.active .chevron{ transform:rotate(90deg); color:var(--accent); }
 
   /* ---------- Hour × weekday heatmap ---------- */
   .heatmap-wrap{ overflow-x:auto; }
@@ -1179,12 +1190,16 @@
   var visibleSlots = {}; ANALYSTS.forEach(function(a){ visibleSlots[a.slot] = true; });
 
   /* ================= SLA breach / pending drill-down ================= */
-  var drilldownState = { kind: null, slot: null };
+  var drilldownState = { kind: null, slot: null, bucketIdx: null };
   var lastDrilldownExport = null;
   var lastSlaExport = null;
   function jiraUrl(key){ return 'https://' + META.site_host + '/browse/' + key; }
   function slotKey(slot){ return (slot === null || slot === undefined) ? 'all' : String(slot); }
-  function isDrilldownActive(kind, slot){ return drilldownState.kind === kind && drilldownState.slot === slot; }
+  function isDrilldownActive(kind, slot, bucketIdx){
+    if (drilldownState.kind !== kind || drilldownState.slot !== slot) return false;
+    if (kind === 'tpaBucket') return drilldownState.bucketIdx === bucketIdx;
+    return true;
+  }
   function fmtDurationShort(minutes){
     if (minutes === null || minutes === undefined || isNaN(minutes)) return '—';
     var m = Math.max(0, Math.round(minutes));
@@ -1198,6 +1213,7 @@
   function closeDrilldown(){
     drilldownState.kind = null;
     drilldownState.slot = null;
+    drilldownState.bucketIdx = null;
     lastDrilldownExport = null;
     var wrap = document.getElementById('breach-drilldown-wrap');
     if (wrap) wrap.hidden = true;
@@ -1205,8 +1221,9 @@
     document.querySelectorAll('.kpi-tile.clickable.active').forEach(function(t){ t.classList.remove('active'); });
     document.querySelectorAll('.status-pill.clickable.active').forEach(function(p){ p.classList.remove('active'); });
     document.querySelectorAll('.pending-count.clickable.active').forEach(function(p){ p.classList.remove('active'); });
+    document.querySelectorAll('.bar-row.clickable.active').forEach(function(r){ r.classList.remove('active'); r.setAttribute('aria-expanded','false'); });
   }
-  function openDrilldown(kind, slot, rowsScope, period){
+  function openDrilldown(kind, slot, rowsScope, period, bucket){
     var isAll = (slot === null || slot === undefined);
     var a = isAll ? null : analystBySlot(slot);
     var scopeName = isAll ? 'todos os analistas' : a.name;
@@ -1215,6 +1232,9 @@
     if (kind === 'pending'){
       rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null; });
       rows.sort(function(x,y){ return x[1] - y[1]; }); // oldest opened first (waiting longest)
+    } else if (kind === 'tpaBucket'){
+      rows = rowsScope.filter(function(r){ return r[2] !== null && r[2] >= bucket.min && r[2] < bucket.max; });
+      rows.sort(function(x,y){ return y[1] - x[1]; }); // mais recentes primeiro
     } else {
       rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[3] === 1; });
       rows.sort(function(x,y){ return (y[2]||0) - (x[2]||0); }); // worst (longest) first
@@ -1256,8 +1276,8 @@
       });
     }
     lastDrilldownExport = {
-      title: (kind === 'pending' ? 'Chamados pendentes de resposta' : 'Chamados com estouro de SLA') + ' - ' + scopeName,
-      filename: (kind === 'pending' ? 'pendentes_' : 'estouro_sla_') + slotKey(slot) + '_' + ymd(Date.now()) + '.xlsx',
+      title: (kind === 'pending' ? 'Chamados pendentes de resposta' : kind === 'tpaBucket' ? ('Chamados respondidos em ' + bucket.label) : 'Chamados com estouro de SLA') + ' - ' + scopeName,
+      filename: (kind === 'pending' ? 'pendentes_' : kind === 'tpaBucket' ? ('tpa_' + bucket.slug + '_') : 'estouro_sla_') + slotKey(slot) + '_' + ymd(Date.now()) + '.xlsx',
       columns: exportColumns,
       rows: exportRows
     };
@@ -1265,14 +1285,18 @@
     var wrap = document.getElementById('breach-drilldown-wrap');
     document.getElementById('breach-drilldown-title').textContent = kind === 'pending'
       ? 'Chamados pendentes de resposta — ' + scopeName
-      : 'Chamados com estouro de SLA — ' + scopeName;
+      : kind === 'tpaBucket'
+        ? 'Chamados respondidos em ' + bucket.label + ' — ' + scopeName
+        : 'Chamados com estouro de SLA — ' + scopeName;
     document.getElementById('breach-drilldown-desc').textContent = kind === 'pending'
       ? fmtInt(rows.length) + ' chamado(s) aguardando primeira resposta · ' + period.label.toLowerCase() + ' · ordenados do mais antigo para o mais recente'
-      : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
+      : kind === 'tpaBucket'
+        ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
+        : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
 
     var tableEl = document.getElementById('breach-drilldown-table');
     if (!rows.length){
-      var emptyMsg = kind === 'pending' ? 'Nenhum chamado pendente de resposta nesse período.' : 'Nenhum chamado com estouro nesse período.';
+      var emptyMsg = kind === 'pending' ? 'Nenhum chamado pendente de resposta nesse período.' : kind === 'tpaBucket' ? 'Nenhum chamado respondido nessa faixa de tempo.' : 'Nenhum chamado com estouro nesse período.';
       tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>'+emptyMsg+'</p></div>';
     } else if (kind === 'pending'){
       var nowMs = Date.now();
@@ -1314,6 +1338,7 @@
     wrap.hidden = false;
     drilldownState.kind = kind;
     drilldownState.slot = slot;
+    drilldownState.bucketIdx = kind === 'tpaBucket' ? bucket.idx : null;
     var sk = slotKey(slot);
     document.querySelectorAll('.status-row').forEach(function(r){
       var isActive = r.getAttribute('data-kind') === kind && r.getAttribute('data-slot') === sk;
@@ -1328,6 +1353,11 @@
     });
     document.querySelectorAll('.pending-count.clickable').forEach(function(p){
       p.classList.toggle('active', p.getAttribute('data-kind') === kind && p.getAttribute('data-slot') === sk);
+    });
+    document.querySelectorAll('#tpa-distribution-chart .bar-row.clickable').forEach(function(row){
+      var isActive = kind === 'tpaBucket' && parseInt(row.getAttribute('data-bucket'), 10) === bucket.idx;
+      row.classList.toggle('active', isActive);
+      row.setAttribute('aria-expanded', String(isActive));
     });
     wrap.scrollIntoView({ behavior:'smooth', block:'nearest' });
   }
@@ -1856,20 +1886,22 @@
       row.addEventListener('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); } });
     });
 
-    renderTpaDistribution(rowsAll);
+    renderTpaDistribution(rowsAll, period);
     renderHeatmap();
   }
 
   /* ---- Distribuição do TPA: histograma de chamados respondidos por faixa
-     de tempo até a primeira resposta, no período selecionado. ---- */
-  function renderTpaDistribution(rowsAll){
+     de tempo até a primeira resposta, no período selecionado. Cada faixa com
+     chamados é clicável (seta ▸) e abre a lista de chamados daquela faixa,
+     reaproveitando o mesmo painel de drill-down usado pelos outros gráficos. ---- */
+  function renderTpaDistribution(rowsAll, period){
     var buckets = [
-      { label:'0–5 min',  min:0,   max:5,        color:'--status-good' },
-      { label:'5–15 min', min:5,   max:15,       color:'--status-good' },
-      { label:'15–30 min',min:15,  max:30,       color:'--status-warning' },
-      { label:'30–60 min',min:30,  max:60,       color:'--status-serious' },
-      { label:'1–2 h',    min:60,  max:120,      color:'--status-serious' },
-      { label:'2 h+',     min:120, max:Infinity, color:'--status-critical' }
+      { label:'0–5 min',  slug:'0-5min',   min:0,   max:5,        color:'--status-good' },
+      { label:'5–15 min', slug:'5-15min',  min:5,   max:15,       color:'--status-good' },
+      { label:'15–30 min',slug:'15-30min', min:15,  max:30,       color:'--status-warning' },
+      { label:'30–60 min',slug:'30-60min', min:30,  max:60,       color:'--status-serious' },
+      { label:'1–2 h',    slug:'1-2h',     min:60,  max:120,      color:'--status-serious' },
+      { label:'2 h+',     slug:'2h-mais',  min:120, max:Infinity, color:'--status-critical' }
     ];
     var responded = rowsAll.filter(function(r){ return r[2] !== null; });
     var counts = buckets.map(function(b){
@@ -1880,12 +1912,30 @@
     document.getElementById('tpa-distribution-chart').innerHTML = total ? buckets.map(function(b, i){
       var pct = counts[i] ? Math.max(3, (counts[i] / maxCount) * 100) : 0;
       var share = total ? (counts[i] / total * 100) : 0;
-      return '<div class="bar-row">' +
+      var clickable = counts[i] > 0;
+      var active = clickable && isDrilldownActive('tpaBucket', null, i);
+      var cls = 'bar-row' + (clickable ? ' clickable' : '') + (active ? ' active' : '');
+      var attr = clickable ? ' data-kind="tpaBucket" data-bucket="'+i+'" tabindex="0" role="button" aria-expanded="'+active+'" title="Ver chamados dessa faixa"' : '';
+      return '<div class="'+cls+'"'+attr+'>' +
         '<div class="bar-name">'+b.label+'</div>' +
         '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%; background:var('+b.color+')"></div></div>' +
         '<div class="bar-value num">'+fmtInt(counts[i])+'<span class="u">'+fmtPct(share)+'</span></div>' +
+        (clickable ? '<div class="chevron">▸</div>' : '') +
         '</div>';
     }).join('') : '<div class="empty-state"><p>Sem respostas registradas no período.</p></div>';
+
+    document.querySelectorAll('#tpa-distribution-chart .bar-row.clickable').forEach(function(row){
+      function activate(){
+        var idx = parseInt(row.getAttribute('data-bucket'), 10);
+        if (isDrilldownActive('tpaBucket', null, idx)){ closeDrilldown(); }
+        else {
+          var bucket = buckets[idx];
+          openDrilldown('tpaBucket', null, rowsAll, period, { min:bucket.min, max:bucket.max, label:bucket.label, slug:bucket.slug, idx:idx });
+        }
+      }
+      row.addEventListener('click', activate);
+      row.addEventListener('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); } });
+    });
   }
 
   /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
