@@ -455,6 +455,25 @@
   button.export-btn:disabled{ opacity:0.6; cursor:default; filter:none; }
   button.export-btn svg{ width:13px; height:13px; flex-shrink:0; }
 
+  /* ---------- TPA evolution summary callout ---------- */
+  .evolution-summary{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:12px 14px;
+    border-radius:8px;
+    margin-bottom:16px;
+    font-size:13px;
+    line-height:1.45;
+  }
+  .evolution-summary .es-icon{ flex:none; width:20px; height:20px; }
+  .evolution-summary strong{ font-weight:700; }
+  .evolution-summary.good{ background:color-mix(in srgb, var(--status-good) 12%, transparent); color:var(--text-primary); }
+  .evolution-summary.good strong{ color:var(--status-good); }
+  .evolution-summary.bad{ background:color-mix(in srgb, var(--status-critical) 10%, transparent); color:var(--text-primary); }
+  .evolution-summary.bad strong{ color:var(--status-critical); }
+  .evolution-summary.flat{ background:var(--accent-wash); color:var(--text-primary); }
+
   /* ---------- Legend ---------- */
   .legend{
     display:flex;
@@ -861,6 +880,17 @@
         </div>
       </div>
       <div id="tpa-distribution-chart"></div>
+    </div>
+
+    <div class="panel" id="tpa-evolution-panel">
+      <div class="panel-head">
+        <div>
+          <p class="panel-title">Evolução do TPA</p>
+          <p class="panel-desc">TPA médio da equipe mês a mês, últimos 6 meses — mostra se o atendimento está melhorando</p>
+        </div>
+      </div>
+      <div id="tpa-evolution-summary"></div>
+      <div id="tpa-evolution-chart"></div>
     </div>
 
     <div class="panel" id="heatmap-panel">
@@ -1900,6 +1930,7 @@
     });
 
     renderTpaDistribution(rowsAll, period);
+    renderTpaEvolution();
     renderHeatmap();
   }
 
@@ -1949,6 +1980,61 @@
       row.addEventListener('click', activate);
       row.addEventListener('keydown', function(e){ if (e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); } });
     });
+  }
+
+  /* ---- Evolução do TPA: TPA médio da EQUIPE (todos os analistas juntos),
+     mês a mês, numa janela fixa dos últimos 6 meses — independente do filtro
+     de período lá em cima, porque o objetivo aqui é sempre responder "melhorou
+     ou piorou com o tempo?" de forma direta, com um resumo em texto + uma
+     barra por mês. Reaproveita generateBucketKeys/bucketKey/bucketLabel, os
+     mesmos helpers usados pelo gráfico de "Tendência do TPA". ---- */
+  function renderTpaEvolution(){
+    var MONTHS_BACK = 6;
+    var todayParts = spTodayParts();
+    var startY = todayParts.y, startM = todayParts.m - (MONTHS_BACK - 1);
+    while (startM <= 0){ startM += 12; startY -= 1; }
+    var fromMs = spMidnightMs(startY, startM, 1);
+    var toMs = Date.now();
+    var keys = generateBucketKeys(fromMs, toMs, 'month');
+    var rows = TICKETS.filter(function(t){ return t[1] >= fromMs && t[1] <= toMs; });
+    var byKey = {}; keys.forEach(function(k){ byKey[k] = []; });
+    rows.forEach(function(r){ var k = bucketKey(r[1], 'month'); if (byKey[k]) byKey[k].push(r); });
+    var points = keys.map(function(k){
+      var agg = aggregate(byKey[k]);
+      return { key:k, label: bucketLabel(k, 'month'), avg: agg.avg, count: agg.ticket_count };
+    });
+
+    var validAvgs = points.filter(function(p){ return p.avg !== null; });
+    var maxAvg = Math.max.apply(null, validAvgs.map(function(p){ return p.avg; }).concat([1]));
+
+    document.getElementById('tpa-evolution-chart').innerHTML = validAvgs.length ? points.map(function(p){
+      var pct = p.avg !== null ? Math.max(3, (p.avg / maxAvg) * 100) : 0;
+      return '<div class="bar-row">' +
+        '<div class="bar-name">'+p.label+'</div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%; background:var(--accent)"></div></div>' +
+        '<div class="bar-value num">'+(p.avg !== null ? fmtMinShort(p.avg)+'<span class="u">min</span>' : '—')+'</div>' +
+        '</div>';
+    }).join('') : '<div class="empty-state"><p>Sem respostas registradas nesse período.</p></div>';
+
+    var summaryEl = document.getElementById('tpa-evolution-summary');
+    if (!summaryEl) return;
+    if (validAvgs.length < 2){
+      summaryEl.innerHTML = '';
+      return;
+    }
+    var first = validAvgs[0];
+    var last = validAvgs[validAvgs.length - 1];
+    var diff = last.avg - first.avg;
+    var pct = first.avg !== 0 ? (diff / first.avg * 100) : 0;
+    var improved = diff < -1e-9;
+    var worsened = diff > 1e-9;
+    var cls = improved ? 'good' : (worsened ? 'bad' : 'flat');
+    var icon = improved ? ICONS.good : (worsened ? ICONS.critical : ICONS.neutral);
+    var verb = improved ? 'melhorou' : (worsened ? 'piorou' : 'ficou estável');
+    var pctTxt = Math.abs(pct).toFixed(0) + '%';
+    summaryEl.innerHTML = '<div class="evolution-summary '+cls+'"><span class="es-icon">'+icon+'</span>' +
+      '<span>O TPA médio da equipe <strong>'+verb+(Math.abs(diff) > 1e-9 ? ' ' + pctTxt : '')+'</strong> de ' +
+      first.label + ' (' + fmtMinShort(first.avg) + ' min) até ' + last.label + ' (' + fmtMinShort(last.avg) + ' min).</span></div>';
   }
 
   /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
@@ -2399,11 +2485,13 @@
     var gLabel = granularity === 'day' ? 'diária' : granularity === 'week' ? 'semanal' : 'mensal';
 
     var tpaDistributionPanel = document.getElementById('tpa-distribution-panel');
+    var tpaEvolutionPanel = document.getElementById('tpa-evolution-panel');
     var heatmapPanel = document.getElementById('heatmap-panel');
 
     if (state.analyst === 'all'){
       overviewCharts.hidden = false;
       tpaDistributionPanel.hidden = false;
+      tpaEvolutionPanel.hidden = false;
       heatmapPanel.hidden = false;
       renderOverviewCharts(rowsScope, period);
 
@@ -2422,6 +2510,7 @@
     } else {
       overviewCharts.hidden = true;
       tpaDistributionPanel.hidden = true;
+      tpaEvolutionPanel.hidden = true;
       heatmapPanel.hidden = true;
 
       var a = analystBySlot(state.analyst);
