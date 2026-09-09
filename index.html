@@ -286,8 +286,8 @@
   }
   .pill-btn.active{ background:var(--text-primary); color:var(--page); }
   .pill-btn:not(.active):hover{ background:var(--accent-wash); color:var(--text-primary); }
-  .pill-group-sm{ padding:2px; }
-  .pill-group-sm .pill-btn{ font-size:12px; padding:5px 9px; }
+  #heatmap-period-pills{ margin-bottom:8px; }
+  #heatmap-custom-range{ margin-bottom:16px; }
 
   .date-range{
     display:flex;
@@ -867,14 +867,14 @@
       <div class="panel-head">
         <div>
           <p class="panel-title">Volume por dia e horário</p>
-          <p class="panel-desc" id="heatmap-desc">Quando os chamados chegam, nos últimos 90 dias (não muda com o filtro de período acima) — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio</p>
+          <p class="panel-desc">Quando os chamados chegam — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio. Período independente do filtro principal, escolha abaixo</p>
         </div>
-        <div class="panel-head-actions">
-          <div class="pill-group pill-group-sm" id="heatmap-window-group" role="group" aria-label="Janela do mapa de calor">
-            <button type="button" class="pill-btn active" data-window="90">90 dias</button>
-            <button type="button" class="pill-btn" data-window="180">6 meses</button>
-          </div>
-        </div>
+      </div>
+      <div class="pill-group" id="heatmap-period-pills" role="group" aria-label="Período do mapa de calor"></div>
+      <div class="date-range" id="heatmap-custom-range" hidden>
+        <input type="date" id="heatmap-custom-from">
+        <span>–</span>
+        <input type="date" id="heatmap-custom-to">
       </div>
       <div class="heatmap-wrap"><div class="heatmap-grid" id="heatmap-grid"></div></div>
       <div class="legend heatmap-legend">
@@ -1413,6 +1413,19 @@
     document.getElementById('custom-to').value = maxDateInput;
     state.customFrom = defaultFromInput;
     state.customTo = maxDateInput;
+
+    var heatmapFromEl = document.getElementById('heatmap-custom-from');
+    var heatmapToEl = document.getElementById('heatmap-custom-to');
+    if (heatmapFromEl && heatmapToEl){
+      heatmapFromEl.min = minDateInput;
+      heatmapFromEl.max = maxDateInput;
+      heatmapToEl.min = minDateInput;
+      heatmapToEl.max = maxDateInput;
+      heatmapFromEl.value = defaultFromInput;
+      heatmapToEl.value = maxDateInput;
+      heatmapState.customFrom = defaultFromInput;
+      heatmapState.customTo = maxDateInput;
+    }
   }
 
   /* ================= tabs & pills ================= */
@@ -1941,31 +1954,38 @@
   /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
      em horário de Brasília (fixo UTC-3, sem DST desde 2019). Ajuda a ver os
      picos de demanda pra planejar escala/plantão.
-     Usa uma janela fixa (90 dias ou 6 meses, à escolha), independente do
-     filtro de período escolhido lá em cima — um filtro curto (ex.: "Esta
-     semana") deixaria a maioria dos dias/horas em branco só por ainda não
-     terem acontecido, o que esconderia o padrão real de chegada de chamados. ---- */
-  var heatmapWindowDays = 90;
-  (function setupHeatmapWindowToggle(){
-    var group = document.getElementById('heatmap-window-group');
-    if (!group) return;
-    group.querySelectorAll('.pill-btn').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        heatmapWindowDays = parseInt(btn.getAttribute('data-window'), 10);
-        group.querySelectorAll('.pill-btn').forEach(function(b){ b.classList.toggle('active', b === btn); });
-        renderHeatmap();
+     Tem seu próprio seletor de período (mesmas opções do filtro principal lá
+     em cima), independente do que está selecionado ali — reaproveita
+     computePeriod()/PERIOD_OPTS pra ficar idêntico em opções e comportamento. ---- */
+  var heatmapState = { period: '90d', customFrom: null, customTo: null };
+  (function setupHeatmapPeriodPills(){
+    var pillsEl2 = document.getElementById('heatmap-period-pills');
+    var customRangeEl2 = document.getElementById('heatmap-custom-range');
+    if (!pillsEl2) return;
+    function render(){
+      pillsEl2.innerHTML = PERIOD_OPTS.map(function(p){
+        var active = heatmapState.period === p.key;
+        return '<button type="button" class="pill-btn'+(active?' active':'')+'" data-period="'+p.key+'">'+p.label+'</button>';
+      }).join('');
+      pillsEl2.querySelectorAll('.pill-btn').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          heatmapState.period = btn.getAttribute('data-period');
+          customRangeEl2.hidden = heatmapState.period !== 'custom';
+          render();
+          renderHeatmap();
+        });
       });
-    });
+      customRangeEl2.hidden = heatmapState.period !== 'custom';
+    }
+    render();
+    var fromInput2 = document.getElementById('heatmap-custom-from');
+    var toInput2 = document.getElementById('heatmap-custom-to');
+    fromInput2.addEventListener('change', function(e){ heatmapState.customFrom = e.target.value; if (heatmapState.period==='custom') renderHeatmap(); });
+    toInput2.addEventListener('change', function(e){ heatmapState.customTo = e.target.value; if (heatmapState.period==='custom') renderHeatmap(); });
   })();
   function renderHeatmap(){
-    var now = Date.now();
-    var from = now - heatmapWindowDays * 86400000;
-    var rows = TICKETS.filter(function(t){ return t[1] >= from && t[1] <= now; });
-    var descEl = document.getElementById('heatmap-desc');
-    if (descEl){
-      var windowLabel = heatmapWindowDays === 90 ? 'últimos 90 dias' : 'últimos 6 meses';
-      descEl.textContent = 'Quando os chamados chegam, nos ' + windowLabel + ' (não muda com o filtro de período acima) — quanto mais escuro, mais chamados; passe o mouse para ver o TPA médio';
-    }
+    var period = computePeriod(heatmapState);
+    var rows = TICKETS.filter(function(t){ return t[1] >= period.from && t[1] <= period.to; });
 
     var dayNames = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
     var grid = [];
