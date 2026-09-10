@@ -1207,6 +1207,12 @@
     if (state.period === '90d'){
       return { from: now - 90*86400000, to: now, label: 'Últimos 3 meses' };
     }
+    if (state.period === '270d'){
+      return { from: now - 270*86400000, to: now, label: 'Últimos 9 meses' };
+    }
+    if (state.period === '365d'){
+      return { from: now - 365*86400000, to: now, label: 'Últimos 12 meses' };
+    }
     if (state.period === 'custom' && state.customFrom && state.customTo){
       var pf = parseYMD(state.customFrom), pt = parseYMD(state.customTo);
       return { from: spMidnightMs(pf.y, pf.m, pf.d), to: spMidnightMs(pt.y, pt.m, pt.d) + 86400000 - 1, label: 'Personalizado' };
@@ -1646,6 +1652,8 @@
     { key:'month', label:'Este mês' },
     { key:'90d', label:'Últimos 3 meses' },
     { key:'180d', label:'Últimos 6 meses' },
+    { key:'270d', label:'Últimos 9 meses' },
+    { key:'365d', label:'Últimos 12 meses' },
     { key:'custom', label:'Personalizado' }
   ];
   var pillsEl = document.getElementById('period-pills');

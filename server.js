@@ -15,7 +15,10 @@ const JIRA_SITE = process.env.JIRA_SITE || "accertetecnologia.atlassian.net";
 const JIRA_EMAIL = process.env.JIRA_EMAIL || "";
 const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN || "";
 const PROJECT_KEY = process.env.JIRA_PROJECT || "SUPORTE";
-const WINDOW_DAYS = parseInt(process.env.WINDOW_DAYS || "185", 10);
+// 395 dias (~13 meses) dá folga pra cobrir o filtro "Últimos 12 meses" com
+// alguma margem — sem isso, o período mais longo do filtro ficaria truncado
+// pelos dados que o servidor nem buscou no Jira.
+const WINDOW_DAYS = parseInt(process.env.WINDOW_DAYS || "395", 10);
 
 const APP_USER = process.env.APP_USER || "accerte";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
