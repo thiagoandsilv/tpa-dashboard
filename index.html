@@ -301,6 +301,7 @@
   .pill-btn:not(.active):hover{ background:var(--accent-wash); color:var(--text-primary); }
   #heatmap-period-pills{ margin-bottom:8px; }
   #heatmap-custom-range{ margin-bottom:16px; }
+  #evolution-months-pills, #compliance-months-pills{ margin-bottom:12px; }
 
   .date-range{
     display:flex;
@@ -908,9 +909,10 @@
       <div class="panel-head">
         <div>
           <p class="panel-title">Evolução do TPA</p>
-          <p class="panel-desc">TPA médio da equipe mês a mês, últimos 6 meses — mostra se o atendimento está melhorando</p>
+          <p class="panel-desc" id="tpa-evolution-desc">TPA médio da equipe mês a mês — mostra se o atendimento está melhorando</p>
         </div>
       </div>
+      <div class="pill-group" id="evolution-months-pills" role="group" aria-label="Janela da Evolução do TPA"></div>
       <div id="tpa-evolution-summary"></div>
       <div id="tpa-evolution-chart"></div>
     </div>
@@ -919,9 +921,10 @@
       <div class="panel-head">
         <div>
           <p class="panel-title">Cumprimento da Meta</p>
-          <p class="panel-desc">% de chamados respondidos dentro da meta de SLA, mês a mês, últimos 6 meses</p>
+          <p class="panel-desc" id="tpa-compliance-desc">% de chamados respondidos dentro da meta de SLA, mês a mês</p>
         </div>
       </div>
+      <div class="pill-group" id="compliance-months-pills" role="group" aria-label="Janela do Cumprimento da Meta"></div>
       <div id="tpa-compliance-summary"></div>
       <div id="tpa-compliance-chart"></div>
     </div>
@@ -1576,13 +1579,13 @@
         rows: rankingRows
       },
       evolution: lastEvolutionData ? {
-        title: 'Evolução do TPA (últimos 6 meses)',
+        title: 'Evolução do TPA (últimos ' + evolutionState.monthsBack + ' meses)',
         points: lastEvolutionData.points,
         summary: lastEvolutionData.summary,
         trend: lastEvolutionData.trend
       } : null,
       compliance: lastComplianceData ? {
-        title: 'Cumprimento da Meta (últimos 6 meses)',
+        title: 'Cumprimento da Meta (últimos ' + complianceState.monthsBack + ' meses)',
         points: lastComplianceData.points,
         summary: lastComplianceData.summary,
         trend: lastComplianceData.trend
@@ -2174,9 +2177,41 @@
      de período lá em cima, porque o objetivo aqui é sempre responder "melhorou
      ou piorou com o tempo?" de forma direta, com um resumo em texto + uma
      barra por mês. Reaproveita generateBucketKeys/bucketKey/bucketLabel, os
-     mesmos helpers usados pelo gráfico de "Tendência do TPA". ---- */
+     mesmos helpers usados pelo gráfico de "Tendência do TPA".
+     Tem seletor próprio de janela (6/9/12 meses), independente do filtro de
+     período lá em cima — mesmo espírito do seletor do mapa de calor. ---- */
+  var MONTHS_BACK_OPTS = [
+    { key:6, label:'6 meses' },
+    { key:9, label:'9 meses' },
+    { key:12, label:'12 meses' }
+  ];
+  var evolutionState = { monthsBack: 6 };
+  var complianceState = { monthsBack: 6 };
+  function setupMonthsBackPills(elId, stateObj, onChange){
+    var el = document.getElementById(elId);
+    if (!el) return;
+    function render(){
+      el.innerHTML = MONTHS_BACK_OPTS.map(function(o){
+        var active = stateObj.monthsBack === o.key;
+        return '<button type="button" class="pill-btn'+(active?' active':'')+'" data-months="'+o.key+'">'+o.label+'</button>';
+      }).join('');
+      el.querySelectorAll('.pill-btn').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          stateObj.monthsBack = parseInt(btn.getAttribute('data-months'), 10);
+          render();
+          onChange();
+        });
+      });
+    }
+    render();
+  }
+  setupMonthsBackPills('evolution-months-pills', evolutionState, function(){ renderTpaEvolution(); });
+  setupMonthsBackPills('compliance-months-pills', complianceState, function(){ renderComplianceEvolution(); });
+
   function renderTpaEvolution(){
-    var MONTHS_BACK = 6;
+    var MONTHS_BACK = evolutionState.monthsBack;
+    var descEl = document.getElementById('tpa-evolution-desc');
+    if (descEl) descEl.textContent = 'TPA médio da equipe mês a mês, últimos ' + MONTHS_BACK + ' meses — mostra se o atendimento está melhorando';
     var todayParts = spTodayParts();
     var startY = todayParts.y, startM = todayParts.m - (MONTHS_BACK - 1);
     while (startM <= 0){ startM += 12; startY -= 1; }
@@ -2239,7 +2274,9 @@
      média). Reaproveita aggregate() (breach_rate_pct) e statusFor() pra manter
      a mesma linguagem de cor usada no resto do dashboard. ---- */
   function renderComplianceEvolution(){
-    var MONTHS_BACK = 6;
+    var MONTHS_BACK = complianceState.monthsBack;
+    var descEl = document.getElementById('tpa-compliance-desc');
+    if (descEl) descEl.textContent = '% de chamados respondidos dentro da meta de SLA, mês a mês, últimos ' + MONTHS_BACK + ' meses';
     var todayParts = spTodayParts();
     var startY = todayParts.y, startM = todayParts.m - (MONTHS_BACK - 1);
     while (startM <= 0){ startM += 12; startY -= 1; }
