@@ -164,6 +164,7 @@
 
   .meta-actions{ display:flex; gap:8px; justify-content:flex-end; }
   .meta-actions .refresh-btn{ margin-top:0; }
+  .meta-actions .export-btn{ padding:8px 14px; font-size:12.5px; }
   .alert-toggle-btn{
     display:inline-flex; align-items:center; gap:6px;
     font-family:inherit; font-size:12.5px; font-weight:600;
@@ -211,6 +212,18 @@
     justify-content:space-between;
     gap:12px 20px;
     margin-bottom:20px;
+  }
+  #priority-bar{
+    justify-content:flex-start;
+    gap:10px;
+    margin-top:-8px;
+  }
+  .filter-label{
+    font-size:12px;
+    font-weight:600;
+    color:var(--text-muted);
+    text-transform:uppercase;
+    letter-spacing:.02em;
   }
   .tabs{
     display:flex;
@@ -798,6 +811,10 @@
           <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.6c-.5 0-.9.4-.9.9v.5C4.8 3.4 3.1 5.3 3.1 7.7v2.5c0 .5-.2.9-.5 1.3l-.8.9c-.5.5-.1 1.4.6 1.4h11.2c.7 0 1.1-.9.6-1.4l-.8-.9c-.3-.4-.5-.8-.5-1.3V7.7c0-2.4-1.7-4.3-4-4.7v-.5c0-.5-.4-.9-.9-.9z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M6.3 14.1a1.7 1.7 0 0 0 3.4 0" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
           <span id="alert-toggle-label">Ativar alertas</span>
         </button>
+        <button class="export-btn" id="pdf-export-btn" type="button" title="Gera um PDF com o resumo do período/analista/prioridade selecionados">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.5v8.5m0 0L4.8 6.8M8 10l3.2-3.2M2.5 12v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Exportar PDF
+        </button>
         <button class="refresh-btn" id="refresh-btn" type="button" title="Busca os dados mais recentes direto no Jira">
           <svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.89M13.5 2.5v3.5H10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Atualizar
@@ -818,6 +835,11 @@
         <input type="date" id="custom-to">
       </div>
     </div>
+  </div>
+
+  <div class="controls-bar" id="priority-bar">
+    <span class="filter-label">Prioridade</span>
+    <div class="pill-group" id="priority-pills" role="group" aria-label="Prioridade"></div>
   </div>
 
   <section class="kpi-grid" id="kpi-grid" aria-label="Indicadores"></section>
@@ -891,6 +913,17 @@
       </div>
       <div id="tpa-evolution-summary"></div>
       <div id="tpa-evolution-chart"></div>
+    </div>
+
+    <div class="panel" id="tpa-compliance-panel">
+      <div class="panel-head">
+        <div>
+          <p class="panel-title">Cumprimento da Meta</p>
+          <p class="panel-desc">% de chamados respondidos dentro da meta de SLA, mês a mês, últimos 6 meses</p>
+        </div>
+      </div>
+      <div id="tpa-compliance-summary"></div>
+      <div id="tpa-compliance-chart"></div>
     </div>
 
     <div class="panel" id="heatmap-panel">
@@ -994,11 +1027,25 @@
 (function(){
   "use strict";
 
-  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null]
+  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null, priority|null]
      ongoingBreachEpochMs is set only for tickets still awaiting first response — the exact
-     wall-clock moment their SLA cycle will breach (used by the "SLA" watch tab). */
+     wall-clock moment their SLA cycle will breach (used by the "SLA" watch tab).
+     priority (t[8]) vem direto do campo "Prioridade" do Jira (ex.: "Muito Alto", "Alto",
+     "Médio", "Baixo", "Muito Baixo") — usado pelo filtro global de prioridade. */
   var TICKETS = [];
   var META = null;
+
+  // Ordem de exibição conhecida do esquema de prioridade do Jira. Qualquer valor
+  // que apareça nos dados e não esteja nessa lista é anexado ao final, na ordem
+  // em que for encontrado — assim o filtro nunca "esconde" uma prioridade nova.
+  var PRIORITY_ORDER = ["Muito Alto", "Alto", "Médio", "Baixo", "Muito Baixo"];
+  function priorityOptionsFromTickets(){
+    var seen = {};
+    TICKETS.forEach(function(t){ if (t[8]) seen[t[8]] = true; });
+    var known = PRIORITY_ORDER.filter(function(p){ return seen[p]; });
+    var extra = Object.keys(seen).filter(function(p){ return PRIORITY_ORDER.indexOf(p) === -1; }).sort();
+    return known.concat(extra);
+  }
 
   var ANALYSTS = [
     { name: "Lucas Viana Hahn", short: "Lucas V. Hahn", slot: 1 },
@@ -1168,8 +1215,15 @@
   }
 
   /* ================= aggregation ================= */
+  // Aplica o filtro global de prioridade (state.priority) — usado por todo lugar
+  // que hoje lê TICKETS diretamente, pra que o filtro afete o dashboard inteiro
+  // (KPIs, gráficos, mapa de calor, evolução, cumprimento de meta e aba SLA).
+  function visibleTickets(){
+    if (state.priority === 'all') return TICKETS;
+    return TICKETS.filter(function(t){ return t[8] === state.priority; });
+  }
   function filterTickets(from, to, slot){
-    return TICKETS.filter(function(t){
+    return visibleTickets().filter(function(t){
       return t[1] >= from && t[1] <= to && (slot == null || t[0] === slot);
     });
   }
@@ -1216,13 +1270,15 @@
   }
 
   /* ================= state ================= */
-  var state = { analyst: 'all', period: '180d', customFrom: null, customTo: null };
+  var state = { analyst: 'all', period: '180d', customFrom: null, customTo: null, priority: 'all' };
   var visibleSlots = {}; ANALYSTS.forEach(function(a){ visibleSlots[a.slot] = true; });
 
   /* ================= SLA breach / pending drill-down ================= */
   var drilldownState = { kind: null, slot: null, bucketIdx: null };
   var lastDrilldownExport = null;
   var lastSlaExport = null;
+  var lastEvolutionData = null;
+  var lastComplianceData = null;
   function jiraUrl(key){ return 'https://' + META.site_host + '/browse/' + key; }
   function slotKey(slot){ return (slot === null || slot === undefined) ? 'all' : String(slot); }
   function isDrilldownActive(kind, slot, bucketIdx){
@@ -1428,6 +1484,109 @@
     requestXlsxExport(lastDrilldownExport, this);
   });
 
+  // Gera e baixa um PDF a partir de um payload {title, scopeLabel, generatedAt,
+  // filename, kpis, ranking, evolution, compliance} já pronto no navegador —
+  // mesmo padrão do requestXlsxExport, só que apontando pro endpoint de PDF.
+  async function requestPdfExport(payload, btn){
+    if (!payload) return;
+    var originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Gerando…';
+    try {
+      var res = await fetch('/api/export/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = payload.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    } catch (e){
+      alert('Não foi possível gerar o PDF: ' + (e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+
+  // Monta o payload do relatório em PDF a partir do estado atual (período,
+  // analista, prioridade) — os mesmos números exibidos na tela — e do último
+  // cálculo de Evolução do TPA / Cumprimento da Meta (lastEvolutionData /
+  // lastComplianceData), preenchidos por renderTpaEvolution/renderComplianceEvolution
+  // a cada renderAll() da Visão Geral.
+  function buildPdfPayload(){
+    var period = computePeriod(state);
+    var rowsScope = filterTickets(period.from, period.to, state.analyst === 'all' ? null : state.analyst);
+    var aggScope = aggregate(rowsScope);
+    var priorityLabel = state.priority === 'all' ? '' : ' · Prioridade: ' + state.priority;
+    var scopeLabel = period.label + (state.analyst === 'all' ? ' · todos os analistas' : ' · ' + analystBySlot(state.analyst).short) + priorityLabel;
+
+    var kpis = [
+      { label:'Chamados', value: fmtInt(aggScope.ticket_count), sub: scopeLabel },
+      { label:'TPA médio', value: aggScope.avg != null ? fmtMinShort(aggScope.avg) + ' min' : '—', sub: 'mediana ' + (aggScope.median != null ? fmtMinShort(aggScope.median) + ' min' : '—') },
+      { label:'Estouro de SLA', value: aggScope.breach_rate_pct != null ? fmtPct(aggScope.breach_rate_pct) : '—', sub: fmtInt(aggScope.breached_count) + ' de ' + fmtInt(aggScope.ticket_count) + ' chamados' },
+      { label:'Pendentes de resposta', value: fmtInt(aggScope.pending_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' }
+    ];
+
+    // Ranking sempre com os 4 analistas (independente da aba selecionada), no
+    // mesmo período/prioridade — é o que faz sentido num relatório de comparação.
+    var rowsAllAnalysts = filterTickets(period.from, period.to, null);
+    var ranking = ANALYSTS.map(function(a){
+      var agg = aggregate(rowsAllAnalysts.filter(function(r){ return r[0] === a.slot; }));
+      var compliance = agg.breach_rate_pct === null ? null : (100 - agg.breach_rate_pct);
+      return { name: a.short, avg: agg.avg, compliance: compliance, count: agg.ticket_count };
+    }).sort(function(x, y){
+      if (x.avg === null) return 1;
+      if (y.avg === null) return -1;
+      return x.avg - y.avg;
+    });
+    var rankingRows = ranking.map(function(r){
+      return [r.name, r.avg != null ? fmtMinShort(r.avg) + ' min' : '—', r.compliance != null ? fmtPct(r.compliance) : '—', fmtInt(r.count)];
+    });
+
+    var generatedAt = new Date().toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'America/Sao_Paulo' }) + ' (Brasília)';
+
+    return {
+      title: 'Relatório de Desempenho — TPA',
+      scopeLabel: scopeLabel,
+      generatedAt: generatedAt,
+      filename: 'relatorio_tpa_' + ymd(Date.now()) + '.pdf',
+      projectKey: (META && META.source_project) || 'SUPORTE',
+      kpis: kpis,
+      ranking: {
+        columns: [
+          { header:'Analista', width:170 },
+          { header:'TPA médio', width:90, align:'right' },
+          { header:'% dentro da meta', width:120, align:'right' },
+          { header:'Volume', width:90, align:'right' }
+        ],
+        rows: rankingRows
+      },
+      evolution: lastEvolutionData ? {
+        title: 'Evolução do TPA (últimos 6 meses)',
+        points: lastEvolutionData.points,
+        summary: lastEvolutionData.summary,
+        trend: lastEvolutionData.trend
+      } : null,
+      compliance: lastComplianceData ? {
+        title: 'Cumprimento da Meta (últimos 6 meses)',
+        points: lastComplianceData.points,
+        summary: lastComplianceData.summary,
+        trend: lastComplianceData.trend
+      } : null
+    };
+  }
+  document.getElementById('pdf-export-btn').addEventListener('click', function(){
+    requestPdfExport(buildPdfPayload(), this);
+  });
+
   /* ================= header meta (recomputed on every data load) ================= */
   function applyDatasetMeta(){
     document.getElementById('generated-at').textContent = fmtDateTimeBR(META.generated_at);
@@ -1509,6 +1668,24 @@
   document.getElementById('custom-from').addEventListener('change', function(e){ state.customFrom = e.target.value; if (state.period==='custom') renderAll(); });
   document.getElementById('custom-to').addEventListener('change', function(e){ state.customTo = e.target.value; if (state.period==='custom') renderAll(); });
 
+  // Filtro global de prioridade — afeta o dashboard inteiro (ver visibleTickets()),
+  // não só a Visão Geral, então fica fora do period-group, aplicado sempre visível.
+  var priorityPillsEl = document.getElementById('priority-pills');
+  function renderPriorityPills(){
+    var opts = [{ key:'all', label:'Todas' }].concat(priorityOptionsFromTickets().map(function(p){ return { key:p, label:p }; }));
+    priorityPillsEl.innerHTML = opts.map(function(p){
+      var active = state.priority === p.key;
+      return '<button type="button" class="pill-btn'+(active?' active':'')+'" data-priority="'+escapeHtml(p.key)+'">'+escapeHtml(p.label)+'</button>';
+    }).join('');
+    priorityPillsEl.querySelectorAll('.pill-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        state.priority = btn.getAttribute('data-priority');
+        renderPriorityPills();
+        renderAll();
+      });
+    });
+  }
+
   /* ================= live data loading / refresh ================= */
   var refreshStatusEl = document.getElementById('refresh-status');
   function setRefreshStatus(text, cls){
@@ -1530,6 +1707,7 @@
     applyDatasetMeta();
     renderTabs();
     renderPills();
+    renderPriorityPills();
     renderAll();
   }
 
@@ -1804,7 +1982,7 @@
     var now = Date.now();
     // r[7] = ongoingBreachMs (only set for tickets still awaiting first response);
     // r[6] = goalMin. Only the 30-minute SLA tier is shown here, per request.
-    var rows = TICKETS.filter(function(r){
+    var rows = visibleTickets().filter(function(r){
       return r[7] != null && r[2] === null && Math.round(r[6]) === 30;
     });
     rows.sort(function(x,y){ return x[7] - y[7]; }); // soonest breach first
@@ -1931,6 +2109,7 @@
 
     renderTpaDistribution(rowsAll, period);
     renderTpaEvolution();
+    renderComplianceEvolution();
     renderHeatmap();
   }
 
@@ -1996,7 +2175,7 @@
     var fromMs = spMidnightMs(startY, startM, 1);
     var toMs = Date.now();
     var keys = generateBucketKeys(fromMs, toMs, 'month');
-    var rows = TICKETS.filter(function(t){ return t[1] >= fromMs && t[1] <= toMs; });
+    var rows = visibleTickets().filter(function(t){ return t[1] >= fromMs && t[1] <= toMs; });
     var byKey = {}; keys.forEach(function(k){ byKey[k] = []; });
     rows.forEach(function(r){ var k = bucketKey(r[1], 'month'); if (byKey[k]) byKey[k].push(r); });
     var points = keys.map(function(k){
@@ -2017,24 +2196,96 @@
     }).join('') : '<div class="empty-state"><p>Sem respostas registradas nesse período.</p></div>';
 
     var summaryEl = document.getElementById('tpa-evolution-summary');
-    if (!summaryEl) return;
-    if (validAvgs.length < 2){
+    var summaryPlain = null, trend = null;
+    if (validAvgs.length >= 2){
+      var first = validAvgs[0];
+      var last = validAvgs[validAvgs.length - 1];
+      var diff = last.avg - first.avg;
+      var pct = first.avg !== 0 ? (diff / first.avg * 100) : 0;
+      var improved = diff < -1e-9;
+      var worsened = diff > 1e-9;
+      var cls = improved ? 'good' : (worsened ? 'bad' : 'flat');
+      var icon = improved ? ICONS.good : (worsened ? ICONS.critical : ICONS.neutral);
+      var verb = improved ? 'melhorou' : (worsened ? 'piorou' : 'ficou estável');
+      var pctTxt = Math.abs(pct).toFixed(0) + '%';
+      trend = cls;
+      summaryPlain = 'O TPA médio da equipe ' + verb + (Math.abs(diff) > 1e-9 ? ' ' + pctTxt : '') + ' de ' +
+        first.label + ' (' + fmtMinShort(first.avg) + ' min) até ' + last.label + ' (' + fmtMinShort(last.avg) + ' min).';
+      if (summaryEl) summaryEl.innerHTML = '<div class="evolution-summary '+cls+'"><span class="es-icon">'+icon+'</span>' +
+        '<span>O TPA médio da equipe <strong>'+verb+(Math.abs(diff) > 1e-9 ? ' ' + pctTxt : '')+'</strong> de ' +
+        first.label + ' (' + fmtMinShort(first.avg) + ' min) até ' + last.label + ' (' + fmtMinShort(last.avg) + ' min).</span></div>';
+    } else if (summaryEl) {
       summaryEl.innerHTML = '';
-      return;
     }
-    var first = validAvgs[0];
-    var last = validAvgs[validAvgs.length - 1];
-    var diff = last.avg - first.avg;
-    var pct = first.avg !== 0 ? (diff / first.avg * 100) : 0;
-    var improved = diff < -1e-9;
-    var worsened = diff > 1e-9;
-    var cls = improved ? 'good' : (worsened ? 'bad' : 'flat');
-    var icon = improved ? ICONS.good : (worsened ? ICONS.critical : ICONS.neutral);
-    var verb = improved ? 'melhorou' : (worsened ? 'piorou' : 'ficou estável');
-    var pctTxt = Math.abs(pct).toFixed(0) + '%';
-    summaryEl.innerHTML = '<div class="evolution-summary '+cls+'"><span class="es-icon">'+icon+'</span>' +
-      '<span>O TPA médio da equipe <strong>'+verb+(Math.abs(diff) > 1e-9 ? ' ' + pctTxt : '')+'</strong> de ' +
-      first.label + ' (' + fmtMinShort(first.avg) + ' min) até ' + last.label + ' (' + fmtMinShort(last.avg) + ' min).</span></div>';
+
+    lastEvolutionData = {
+      points: points.map(function(p){ return { label: p.label, value: p.avg }; }),
+      summary: summaryPlain,
+      trend: trend
+    };
+  }
+
+  /* ---- Cumprimento da Meta: % de chamados respondidos DENTRO da meta de SLA,
+     mês a mês, últimos 6 meses — a mesma janela/lógica da Evolução do TPA, mas
+     olhando se o time está cumprindo o prazo (não só quão rápido responde em
+     média). Reaproveita aggregate() (breach_rate_pct) e statusFor() pra manter
+     a mesma linguagem de cor usada no resto do dashboard. ---- */
+  function renderComplianceEvolution(){
+    var MONTHS_BACK = 6;
+    var todayParts = spTodayParts();
+    var startY = todayParts.y, startM = todayParts.m - (MONTHS_BACK - 1);
+    while (startM <= 0){ startM += 12; startY -= 1; }
+    var fromMs = spMidnightMs(startY, startM, 1);
+    var toMs = Date.now();
+    var keys = generateBucketKeys(fromMs, toMs, 'month');
+    var rows = visibleTickets().filter(function(t){ return t[1] >= fromMs && t[1] <= toMs; });
+    var byKey = {}; keys.forEach(function(k){ byKey[k] = []; });
+    rows.forEach(function(r){ var k = bucketKey(r[1], 'month'); if (byKey[k]) byKey[k].push(r); });
+    var points = keys.map(function(k){
+      var agg = aggregate(byKey[k]);
+      var compliance = agg.breach_rate_pct === null ? null : (100 - agg.breach_rate_pct);
+      return { key:k, label: bucketLabel(k, 'month'), compliance: compliance, count: agg.ticket_count };
+    });
+
+    var validPts = points.filter(function(p){ return p.compliance !== null; });
+
+    document.getElementById('tpa-compliance-chart').innerHTML = validPts.length ? points.map(function(p){
+      var pct = p.compliance !== null ? Math.max(3, p.compliance) : 0;
+      var st = p.compliance !== null ? statusFor(100 - p.compliance) : { key:'neutral' };
+      return '<div class="bar-row">' +
+        '<div class="bar-name">'+p.label+'</div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%; background:var(--status-'+st.key+')"></div></div>' +
+        '<div class="bar-value num">'+(p.compliance !== null ? fmtPct(p.compliance) : '—')+'</div>' +
+        '</div>';
+    }).join('') : '<div class="empty-state"><p>Sem respostas registradas nesse período.</p></div>';
+
+    var summaryEl = document.getElementById('tpa-compliance-summary');
+    var summaryPlain = null, trend = null;
+    if (validPts.length >= 2){
+      var first = validPts[0];
+      var last = validPts[validPts.length - 1];
+      var diff = last.compliance - first.compliance;
+      var improved = diff > 1e-9;
+      var worsened = diff < -1e-9;
+      var cls = improved ? 'good' : (worsened ? 'bad' : 'flat');
+      var icon = improved ? ICONS.good : (worsened ? ICONS.critical : ICONS.neutral);
+      var verb = improved ? 'melhorou' : (worsened ? 'piorou' : 'ficou estável');
+      var ptsTxt = Math.abs(diff).toFixed(1).replace('.', ',') + ' p.p.';
+      trend = cls;
+      summaryPlain = 'O cumprimento da meta da equipe ' + verb + (Math.abs(diff) > 1e-9 ? ' ' + ptsTxt : '') + ' de ' +
+        first.label + ' (' + fmtPct(first.compliance) + ') até ' + last.label + ' (' + fmtPct(last.compliance) + ').';
+      if (summaryEl) summaryEl.innerHTML = '<div class="evolution-summary '+cls+'"><span class="es-icon">'+icon+'</span>' +
+        '<span>O cumprimento da meta da equipe <strong>'+verb+(Math.abs(diff) > 1e-9 ? ' ' + ptsTxt : '')+'</strong> de ' +
+        first.label + ' (' + fmtPct(first.compliance) + ') até ' + last.label + ' (' + fmtPct(last.compliance) + ').</span></div>';
+    } else if (summaryEl) {
+      summaryEl.innerHTML = '';
+    }
+
+    lastComplianceData = {
+      points: points.map(function(p){ return { label: p.label, value: p.compliance }; }),
+      summary: summaryPlain,
+      trend: trend
+    };
   }
 
   /* ---- Mapa de calor dia da semana × hora: volume de chamados CRIADOS,
@@ -2071,7 +2322,7 @@
   })();
   function renderHeatmap(){
     var period = computePeriod(heatmapState);
-    var rows = TICKETS.filter(function(t){ return t[1] >= period.from && t[1] <= period.to; });
+    var rows = visibleTickets().filter(function(t){ return t[1] >= period.from && t[1] <= period.to; });
 
     var dayNames = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
     var grid = [];
@@ -2415,6 +2666,7 @@
     var emptyWrapEl = document.getElementById('empty-state-wrap');
     var contentWrapEl = document.getElementById('content-wrap');
     var slaWrapEl = document.getElementById('sla-wrap');
+    var pdfExportBtn = document.getElementById('pdf-export-btn');
 
     if (state.analyst === 'sla'){
       periodGroupEl.hidden = true;
@@ -2422,6 +2674,7 @@
       emptyWrapEl.hidden = true;
       contentWrapEl.hidden = true;
       slaWrapEl.hidden = false;
+      if (pdfExportBtn) pdfExportBtn.hidden = true;
       document.getElementById('subtitle').textContent = 'Monitoramento ao vivo dos chamados pendentes com meta de 30 minutos de primeira resposta.';
       renderSlaWatch();
       startSlaTicker();
@@ -2430,15 +2683,18 @@
     periodGroupEl.hidden = false;
     kpiGridEl.hidden = false;
     slaWrapEl.hidden = true;
+    if (pdfExportBtn) pdfExportBtn.hidden = false;
     stopSlaTicker();
 
     var period = computePeriod(state);
     var granularity = granularityFor(period.from, period.to);
 
-    var scopeLabel = period.label + (state.analyst==='all' ? ' · todos os analistas' : ' · ' + analystBySlot(state.analyst).short);
-    document.getElementById('subtitle').textContent = state.analyst === 'all'
+    var priorityLabel = state.priority === 'all' ? '' : ' · Prioridade: ' + state.priority;
+    var scopeLabel = period.label + (state.analyst==='all' ? ' · todos os analistas' : ' · ' + analystBySlot(state.analyst).short) + priorityLabel;
+    document.getElementById('subtitle').textContent = (state.analyst === 'all'
       ? 'Comparativo dos analistas — ' + period.label.toLowerCase() + '.'
-      : 'Resumo individual de ' + analystBySlot(state.analyst).name + ' — ' + period.label.toLowerCase() + '.';
+      : 'Resumo individual de ' + analystBySlot(state.analyst).name + ' — ' + period.label.toLowerCase() + '.')
+      + (state.priority === 'all' ? '' : ' Prioridade: ' + state.priority + '.');
 
     var rowsScope = filterTickets(period.from, period.to, state.analyst === 'all' ? null : state.analyst);
     var aggScope = aggregate(rowsScope);
@@ -2486,12 +2742,14 @@
 
     var tpaDistributionPanel = document.getElementById('tpa-distribution-panel');
     var tpaEvolutionPanel = document.getElementById('tpa-evolution-panel');
+    var tpaCompliancePanel = document.getElementById('tpa-compliance-panel');
     var heatmapPanel = document.getElementById('heatmap-panel');
 
     if (state.analyst === 'all'){
       overviewCharts.hidden = false;
       tpaDistributionPanel.hidden = false;
       tpaEvolutionPanel.hidden = false;
+      tpaCompliancePanel.hidden = false;
       heatmapPanel.hidden = false;
       renderOverviewCharts(rowsScope, period);
 
@@ -2511,6 +2769,7 @@
       overviewCharts.hidden = true;
       tpaDistributionPanel.hidden = true;
       tpaEvolutionPanel.hidden = true;
+      tpaCompliancePanel.hidden = true;
       heatmapPanel.hidden = true;
 
       var a = analystBySlot(state.analyst);
