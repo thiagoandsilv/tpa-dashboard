@@ -1579,13 +1579,13 @@
         rows: rankingRows
       },
       evolution: lastEvolutionData ? {
-        title: 'Evolução do TPA (últimos ' + evolutionState.monthsBack + ' meses)',
+        title: 'Evolução do TPA (' + (evolutionState.window === 'month' ? 'este mês, por semana' : 'últimos ' + evolutionState.window + ' meses') + ')',
         points: lastEvolutionData.points,
         summary: lastEvolutionData.summary,
         trend: lastEvolutionData.trend
       } : null,
       compliance: lastComplianceData ? {
-        title: 'Cumprimento da Meta (últimos ' + complianceState.monthsBack + ' meses)',
+        title: 'Cumprimento da Meta (' + (complianceState.window === 'month' ? 'este mês, por semana' : 'últimos ' + complianceState.window + ' meses') + ')',
         points: lastComplianceData.points,
         summary: lastComplianceData.summary,
         trend: lastComplianceData.trend
@@ -2178,26 +2178,44 @@
      ou piorou com o tempo?" de forma direta, com um resumo em texto + uma
      barra por mês. Reaproveita generateBucketKeys/bucketKey/bucketLabel, os
      mesmos helpers usados pelo gráfico de "Tendência do TPA".
-     Tem seletor próprio de janela (6/9/12 meses), independente do filtro de
-     período lá em cima — mesmo espírito do seletor do mapa de calor. ---- */
-  var MONTHS_BACK_OPTS = [
-    { key:6, label:'6 meses' },
-    { key:9, label:'9 meses' },
-    { key:12, label:'12 meses' }
+     Tem seletor próprio de janela (Este mês / Últimos 3, 6, 9, 12 meses),
+     independente do filtro de período lá em cima — mesmo espírito do seletor
+     do mapa de calor. "Este mês" foge do padrão "N meses, barra por mês": com
+     só o mês corrente não daria pra ver evolução nenhuma numa única barra, então
+     nesse caso quebra o mês em semanas (bucketKey/generateBucketKeys já
+     suportam granularidade 'week', reaproveitados do gráfico de Tendência). ---- */
+  var EVOLUTION_WINDOW_OPTS = [
+    { key:'month', label:'Este mês' },
+    { key:3, label:'Últimos 3 meses' },
+    { key:6, label:'Últimos 6 meses' },
+    { key:9, label:'Últimos 9 meses' },
+    { key:12, label:'Últimos 12 meses' }
   ];
-  var evolutionState = { monthsBack: 6 };
-  var complianceState = { monthsBack: 6 };
+  var evolutionState = { window: 6 };
+  var complianceState = { window: 6 };
+  function computeEvolutionWindow(windowKey){
+    var toMs = Date.now();
+    if (windowKey === 'month'){
+      var t = spTodayParts();
+      return { fromMs: spMidnightMs(t.y, t.m, 1), toMs: toMs, granularity: 'week' };
+    }
+    var todayParts = spTodayParts();
+    var startY = todayParts.y, startM = todayParts.m - (windowKey - 1);
+    while (startM <= 0){ startM += 12; startY -= 1; }
+    return { fromMs: spMidnightMs(startY, startM, 1), toMs: toMs, granularity: 'month' };
+  }
   function setupMonthsBackPills(elId, stateObj, onChange){
     var el = document.getElementById(elId);
     if (!el) return;
     function render(){
-      el.innerHTML = MONTHS_BACK_OPTS.map(function(o){
-        var active = stateObj.monthsBack === o.key;
-        return '<button type="button" class="pill-btn'+(active?' active':'')+'" data-months="'+o.key+'">'+o.label+'</button>';
+      el.innerHTML = EVOLUTION_WINDOW_OPTS.map(function(o){
+        var active = stateObj.window === o.key;
+        return '<button type="button" class="pill-btn'+(active?' active':'')+'" data-window="'+o.key+'">'+o.label+'</button>';
       }).join('');
       el.querySelectorAll('.pill-btn').forEach(function(btn){
         btn.addEventListener('click', function(){
-          stateObj.monthsBack = parseInt(btn.getAttribute('data-months'), 10);
+          var v = btn.getAttribute('data-window');
+          stateObj.window = v === 'month' ? 'month' : parseInt(v, 10);
           render();
           onChange();
         });
@@ -2209,21 +2227,19 @@
   setupMonthsBackPills('compliance-months-pills', complianceState, function(){ renderComplianceEvolution(); });
 
   function renderTpaEvolution(){
-    var MONTHS_BACK = evolutionState.monthsBack;
+    var win = computeEvolutionWindow(evolutionState.window);
+    var fromMs = win.fromMs, toMs = win.toMs, granularity = win.granularity;
     var descEl = document.getElementById('tpa-evolution-desc');
-    if (descEl) descEl.textContent = 'TPA médio da equipe mês a mês, últimos ' + MONTHS_BACK + ' meses — mostra se o atendimento está melhorando';
-    var todayParts = spTodayParts();
-    var startY = todayParts.y, startM = todayParts.m - (MONTHS_BACK - 1);
-    while (startM <= 0){ startM += 12; startY -= 1; }
-    var fromMs = spMidnightMs(startY, startM, 1);
-    var toMs = Date.now();
-    var keys = generateBucketKeys(fromMs, toMs, 'month');
+    if (descEl) descEl.textContent = evolutionState.window === 'month'
+      ? 'TPA médio da equipe por semana, neste mês — mostra se o atendimento está melhorando'
+      : 'TPA médio da equipe mês a mês, últimos ' + evolutionState.window + ' meses — mostra se o atendimento está melhorando';
+    var keys = generateBucketKeys(fromMs, toMs, granularity);
     var rows = visibleTickets().filter(function(t){ return t[1] >= fromMs && t[1] <= toMs; });
     var byKey = {}; keys.forEach(function(k){ byKey[k] = []; });
-    rows.forEach(function(r){ var k = bucketKey(r[1], 'month'); if (byKey[k]) byKey[k].push(r); });
+    rows.forEach(function(r){ var k = bucketKey(r[1], granularity); if (byKey[k]) byKey[k].push(r); });
     var points = keys.map(function(k){
       var agg = aggregate(byKey[k]);
-      return { key:k, label: bucketLabel(k, 'month'), avg: agg.avg, count: agg.ticket_count };
+      return { key:k, label: bucketLabel(k, granularity), avg: agg.avg, count: agg.ticket_count };
     });
 
     var validAvgs = points.filter(function(p){ return p.avg !== null; });
@@ -2274,22 +2290,20 @@
      média). Reaproveita aggregate() (breach_rate_pct) e statusFor() pra manter
      a mesma linguagem de cor usada no resto do dashboard. ---- */
   function renderComplianceEvolution(){
-    var MONTHS_BACK = complianceState.monthsBack;
+    var win = computeEvolutionWindow(complianceState.window);
+    var fromMs = win.fromMs, toMs = win.toMs, granularity = win.granularity;
     var descEl = document.getElementById('tpa-compliance-desc');
-    if (descEl) descEl.textContent = '% de chamados respondidos dentro da meta de SLA, mês a mês, últimos ' + MONTHS_BACK + ' meses';
-    var todayParts = spTodayParts();
-    var startY = todayParts.y, startM = todayParts.m - (MONTHS_BACK - 1);
-    while (startM <= 0){ startM += 12; startY -= 1; }
-    var fromMs = spMidnightMs(startY, startM, 1);
-    var toMs = Date.now();
-    var keys = generateBucketKeys(fromMs, toMs, 'month');
+    if (descEl) descEl.textContent = complianceState.window === 'month'
+      ? '% de chamados respondidos dentro da meta de SLA, por semana, neste mês'
+      : '% de chamados respondidos dentro da meta de SLA, mês a mês, últimos ' + complianceState.window + ' meses';
+    var keys = generateBucketKeys(fromMs, toMs, granularity);
     var rows = visibleTickets().filter(function(t){ return t[1] >= fromMs && t[1] <= toMs; });
     var byKey = {}; keys.forEach(function(k){ byKey[k] = []; });
-    rows.forEach(function(r){ var k = bucketKey(r[1], 'month'); if (byKey[k]) byKey[k].push(r); });
+    rows.forEach(function(r){ var k = bucketKey(r[1], granularity); if (byKey[k]) byKey[k].push(r); });
     var points = keys.map(function(k){
       var agg = aggregate(byKey[k]);
       var compliance = agg.breach_rate_pct === null ? null : (100 - agg.breach_rate_pct);
-      return { key:k, label: bucketLabel(k, 'month'), compliance: compliance, count: agg.ticket_count };
+      return { key:k, label: bucketLabel(k, granularity), compliance: compliance, count: agg.ticket_count };
     });
 
     var validPts = points.filter(function(p){ return p.compliance !== null; });
