@@ -1045,8 +1045,11 @@
      comum em chamados Interno (que não têm "parent") apontarem pro chamado "de
      verdade" (Zabbix/Solicitação) pro qual aquele trabalho foi feito. Pra saber se um
      chamado "Sem ciclo de SLA" já foi trabalhado, o que importa é só o Registro de
-     Atividades (worklog) do Jira — nunca o ciclo de SLA: ver ownOrLinkedHours(), que
-     olha a hora própria (t[9]) e, na falta dela, a hora lançada no vinculado (t[12]). */
+     Atividades (worklog) do Jira — nunca o ciclo de SLA: ver noSlaRowInfo(), que
+     olha a hora própria e, na falta dela, a hora lançada no vinculado (t[12]). O mesmo
+     noSlaRowInfo() também decide qual dos dois é o "chamado principal" pra exibição: é
+     sempre o de data de criação mais antiga (o Interno costuma ser aberto depois, quando
+     alguém aponta trabalho separado daquele chamado). */
   var TICKETS = [];
   var META = null;
   var TICKET_BY_KEY = null; // cache: chamado (key) -> tupla em TICKETS, reconstruído a cada applyData()
@@ -1057,21 +1060,39 @@
     }
     return key != null ? TICKET_BY_KEY[key] : undefined;
   }
-  // O que importa pra saber se um chamado "sem ciclo de SLA" já foi trabalhado
-  // é exclusivamente o Registro de Atividades do Jira (worklog/horas
-  // lançadas) — não o ciclo de SLA. Primeiro olha a hora lançada no próprio
-  // chamado; se não tiver, cai pra hora lançada no chamado vinculado (comum
-  // em chamados Interno, cujo trabalho às vezes é apontado no chamado
-  // "de verdade" — Zabbix/Solicitação — em vez de no Interno em si).
-  // Só quando nem um nem outro tem hora lançada é que o chamado conta como
-  // "sem apontamento nenhum".
-  function ownOrLinkedHours(t){
-    var ownSec = t[9] || null;
-    if (ownSec) return { sec: ownSec, viaLinked: false };
-    var linkedT = t[12] ? ticketByKey(t[12]) : null;
-    var linkedSec = linkedT ? (linkedT[9] || null) : null;
-    if (linkedSec) return { sec: linkedSec, viaLinked: true };
-    return { sec: null, viaLinked: false };
+  // Reúne, pra uma linha da lista "Sem ciclo de SLA", tudo que depende do par
+  // chamado/vinculado:
+  //  - Qual dos dois é o "chamado principal" pra exibição: sempre o de data de
+  //    criação MAIS ANTIGA (o chamado Interno normalmente é aberto depois, pra
+  //    apontar trabalho separado daquele chamado "de verdade" — Zabbix ou
+  //    Solicitação). Só dá pra comparar quando o vinculado está nos dados
+  //    carregados (senão não temos a data dele, e mantemos t como principal).
+  //  - Horas lançadas: exclusivamente o Registro de Atividades (worklog) do
+  //    Jira, nunca o ciclo de SLA. Olha a hora própria de quem está sendo
+  //    exibido como "Chamado"; se não tiver, cai pra hora do vinculado. Só
+  //    quando nem um nem outro tem hora é que conta como "sem apontamento".
+  function noSlaRowInfo(t){
+    var linkedKey = t[12] || null;
+    var linkedSummary = t[13] || null;
+    var linkedT = linkedKey ? ticketByKey(linkedKey) : null;
+    var swapped = !!(linkedT && linkedT[1] < t[1]); // vinculado é mais antigo -> ele é o principal
+    var principal = swapped ? linkedT : t;
+    var principalKey = swapped ? linkedKey : t[4];
+    var principalSummary = swapped ? linkedSummary : t[5];
+    var otherKey = swapped ? t[4] : linkedKey;
+    var otherSummary = swapped ? t[5] : linkedSummary;
+    var otherTicket = swapped ? t : linkedT; // null quando não há vínculo ou o vinculado não foi carregado
+    var ownSec = principal[9] || null;
+    var otherSec = otherTicket ? (otherTicket[9] || null) : null;
+    return {
+      principalKey: principalKey,
+      principalSummary: principalSummary,
+      createdMs: principal[1],
+      otherKey: otherKey,
+      otherSummary: otherSummary,
+      sec: ownSec || otherSec || null,
+      viaLinked: !ownSec && !!otherSec
+    };
   }
 
   // Ordem de exibição conhecida do esquema de prioridade do Jira. Qualquer valor
@@ -1380,12 +1401,13 @@
       // Ordem: chamados sem NENHUMA hora lançada (nem no próprio, nem no
       // vinculado — o pior caso, ninguém apontou trabalho em lugar nenhum)
       // vêm primeiro; os demais (hora própria ou, na falta dela, hora do
-      // vinculado) vêm depois. Empate: mais recente primeiro.
+      // vinculado) vêm depois. Empate: chamado principal mais recente primeiro.
       rows.sort(function(x,y){
-        var xNoHours = ownOrLinkedHours(x).sec ? 1 : 0; // 0 = sem hora em lugar nenhum (prioridade)
-        var yNoHours = ownOrLinkedHours(y).sec ? 1 : 0;
+        var xInfo = noSlaRowInfo(x), yInfo = noSlaRowInfo(y);
+        var xNoHours = xInfo.sec ? 1 : 0; // 0 = sem hora em lugar nenhum (prioridade)
+        var yNoHours = yInfo.sec ? 1 : 0;
         if (xNoHours !== yNoHours) return xNoHours - yNoHours;
-        return y[1] - x[1]; // desempate: mais recente primeiro
+        return yInfo.createdMs - xInfo.createdMs; // desempate: mais recente primeiro
       });
     } else if (kind === 'tpaBucket'){
       rows = rowsScope.filter(function(r){ return r[2] !== null && r[2] >= bucket.min && r[2] < bucket.max; });
@@ -1426,16 +1448,15 @@
         return relKey + (relSummary ? ' - ' + relSummary : '');
       }
       exportRows = rows.map(function(r){
-        var rSlot = r[0], key = r[4];
-        var linkedKey = r[12], linkedSummary = r[13] || '';
-        var hoursInfo = ownOrLinkedHours(r);
-        var row = [key];
+        var rSlot = r[0];
+        var info = noSlaRowInfo(r);
+        var row = [info.principalKey];
         if (isAll) row.push(analystBySlot(rSlot).short);
         row.push(
-          relatedExportCell(linkedKey, linkedSummary),
-          fmtDateFullBR(r[1]),
-          hoursInfo.sec
-            ? fmtDurationShort(hoursInfo.sec / 60) + (hoursInfo.viaLinked ? ' (apontado no chamado vinculado)' : '')
+          relatedExportCell(info.otherKey, info.otherSummary),
+          fmtDateFullBR(info.createdMs),
+          info.sec
+            ? fmtDurationShort(info.sec / 60) + (info.viaLinked ? ' (apontado no chamado vinculado)' : '')
             : 'Sem apontamento'
         );
         return row;
@@ -1488,18 +1509,17 @@
         return '<a class="ticket-link mono" href="'+jiraUrl(relKey)+'" target="_blank" rel="noopener noreferrer" title="'+relTitle+'">'+escapeHtml(relKey)+'</a>';
       };
       var body = rows.map(function(r){
-        var rSlot = r[0], key = r[4];
-        var linkedKey = r[12], linkedSummary = r[13] || '';
+        var rSlot = r[0];
+        var info = noSlaRowInfo(r);
         var analystCell = isAll ? '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(rSlot)+'"></span>'+analystBySlot(rSlot).short+'</td>' : '';
-        var hoursInfo = ownOrLinkedHours(r);
-        var horasCell = hoursInfo.sec
-          ? fmtDurationShort(hoursInfo.sec/60) + (hoursInfo.viaLinked ? ' <span class="muted" style="font-size:11px;">(vinculado)</span>' : '')
+        var horasCell = info.sec
+          ? fmtDurationShort(info.sec/60) + (info.viaLinked ? ' <span class="muted" style="font-size:11px;">(vinculado)</span>' : '')
           : '<span class="muted">Sem apontamento</span>';
         return '<tr>' +
-          '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
+          '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(info.principalKey)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(info.principalKey)+'</a></td>' +
           analystCell +
-          '<td class="linked-cell" style="text-align:left">'+relatedCellHtml(linkedKey, linkedSummary)+'</td>' +
-          '<td class="num">'+fmtDateFullBR(r[1])+'</td>' +
+          '<td class="linked-cell" style="text-align:left">'+relatedCellHtml(info.otherKey, info.otherSummary)+'</td>' +
+          '<td class="num">'+fmtDateFullBR(info.createdMs)+'</td>' +
           '<td class="num">'+horasCell+'</td>' +
           '</tr>';
       }).join('');
