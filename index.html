@@ -1359,7 +1359,22 @@
       rows.sort(function(x,y){ return x[1] - y[1]; }); // oldest opened first (waiting longest)
     } else if (kind === 'noSla'){
       rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null && r[6] == null; });
-      rows.sort(function(x,y){ return y[1] - x[1]; }); // mais recentes primeiro
+      // Ordem pedida: 1) chamado sem hora lançada própria primeiro (mais
+      // urgente — ninguém apontou trabalho nele); 2) dentro disso, o chamado
+      // vinculado com hora lançada vem antes (já tem algum sinal de trabalho
+      // registrado em algum lugar). Empate: mais recente primeiro.
+      var noSlaSortKey = function(t){
+        var ownNoHours = t[9] ? 1 : 0; // 0 = sem hora própria (prioridade)
+        var linkedT = t[12] ? ticketByKey(t[12]) : null;
+        var linkedNoHours = (linkedT && linkedT[9]) ? 0 : 1; // 0 = vinculado tem hora (prioridade)
+        return [ownNoHours, linkedNoHours];
+      };
+      rows.sort(function(x,y){
+        var kx = noSlaSortKey(x), ky = noSlaSortKey(y);
+        if (kx[0] !== ky[0]) return kx[0] - ky[0];
+        if (kx[1] !== ky[1]) return kx[1] - ky[1];
+        return y[1] - x[1]; // desempate: mais recente primeiro
+      });
     } else if (kind === 'tpaBucket'){
       rows = rowsScope.filter(function(r){ return r[2] !== null && r[2] >= bucket.min && r[2] < bucket.max; });
       rows.sort(function(x,y){ return y[1] - x[1]; }); // mais recentes primeiro
@@ -1443,7 +1458,7 @@
     document.getElementById('breach-drilldown-desc').textContent = kind === 'pending'
       ? fmtInt(rows.length) + ' chamado(s) aguardando primeira resposta · ' + period.label.toLowerCase() + ' · ordenados do mais antigo para o mais recente'
       : kind === 'noSla'
-        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
+        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada primeiro, depois vinculado com hora lançada'
         : kind === 'tpaBucket'
           ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
           : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
