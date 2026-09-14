@@ -370,18 +370,25 @@ function pdfSectionTitle(doc, text, x, y, width) {
 function pdfKpiRow(doc, kpis, x, y, width) {
   var gap = 10;
   var n = kpis.length || 1;
+  // Com 5+ KPIs as caixas ficam mais estreitas e o rótulo (maiúsculo) tem mais
+  // chance de quebrar em duas linhas — dá mais altura e encolhe um pouco a
+  // fonte do rótulo pra não colidir com o valor logo abaixo.
+  var tight = n >= 5;
   var boxW = (width - gap * (n - 1)) / n;
-  var boxH = 58;
+  var boxH = tight ? 66 : 58;
+  var labelFontSize = tight ? 7.5 : 8.5;
+  var valueY = tight ? 26 : 22;
+  var subY = tight ? 50 : 42;
   kpis.forEach(function (k, i) {
     var bx = x + i * (boxW + gap);
     doc.roundedRect(bx, y, boxW, boxH, 4).fillAndStroke("#ffffff", PDF_COLORS.border);
-    doc.font("Helvetica").fontSize(8.5).fillColor(PDF_COLORS.muted);
+    doc.font("Helvetica").fontSize(labelFontSize).fillColor(PDF_COLORS.muted);
     doc.text(String(k.label || "").toUpperCase(), bx + 10, y + 9, { width: boxW - 20 });
     doc.font("Helvetica-Bold").fontSize(16).fillColor(PDF_COLORS.text);
-    doc.text(String(k.value || ""), bx + 10, y + 22, { width: boxW - 20 });
+    doc.text(String(k.value || ""), bx + 10, y + valueY, { width: boxW - 20 });
     if (k.sub) {
       doc.font("Helvetica").fontSize(7.5).fillColor(PDF_COLORS.muted);
-      doc.text(String(k.sub), bx + 10, y + 42, { width: boxW - 20, ellipsis: true });
+      doc.text(String(k.sub), bx + 10, y + subY, { width: boxW - 20, ellipsis: true });
     }
   });
   return y + boxH + 18;
@@ -479,7 +486,7 @@ function buildPdfReport(doc, payload) {
   var y = 96;
 
   if (Array.isArray(payload.kpis) && payload.kpis.length) {
-    y = pdfEnsureSpace(doc, y, 76, 40, 40);
+    y = pdfEnsureSpace(doc, y, 84, 40, 40);
     y = pdfKpiRow(doc, payload.kpis, margin, y, contentW);
   }
 

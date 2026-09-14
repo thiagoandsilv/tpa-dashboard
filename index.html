@@ -328,7 +328,7 @@
   /* ---------- KPI row ---------- */
   .kpi-grid{
     display:grid;
-    grid-template-columns:repeat(4, 1fr);
+    grid-template-columns:repeat(auto-fit, minmax(190px, 1fr));
     gap:12px;
     margin-bottom:20px;
   }
@@ -1245,14 +1245,23 @@
   }
   function aggregate(rows){
     var responded = rows.filter(function(r){ return r[2] !== null; });
-    var pending = rows.length - responded.length;
+    // Sem primeira resposta ainda (r[2]===null) tem dois casos bem diferentes:
+    // um ciclo de SLA em andamento, com meta (r[6]!=null) — está de fato
+    // aguardando resposta e conta pra "Pendentes"; ou nenhum ciclo de SLA
+    // registrado (r[6]==null) — o chamado nunca teve o TPA medido (ex.: tipo
+    // de chamado sem SLA configurado), o que é um problema de dado, não de
+    // atendimento, então entra à parte em "Sem tempo registrado".
+    var notResponded = rows.filter(function(r){ return r[2] === null; });
+    var pendingRows = notResponded.filter(function(r){ return r[6] != null; });
+    var noSlaRows = notResponded.filter(function(r){ return r[6] == null; });
     var elapsed = responded.map(function(r){ return r[2]; }).sort(function(a,b){return a-b;});
     var sum = elapsed.reduce(function(s,v){return s+v;}, 0);
     var breachedRows = responded.filter(function(r){ return r[3] === 1; });
     return {
       ticket_count: rows.length,
       responded_count: responded.length,
-      pending_count: pending,
+      pending_count: pendingRows.length,
+      no_sla_count: noSlaRows.length,
       avg: elapsed.length ? sum/elapsed.length : null,
       median: elapsed.length ? percentile(elapsed, 0.5) : null,
       p90: elapsed.length ? percentile(elapsed, 0.9) : null,
@@ -1325,8 +1334,11 @@
 
     var rows;
     if (kind === 'pending'){
-      rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null; });
+      rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null && r[6] != null; });
       rows.sort(function(x,y){ return x[1] - y[1]; }); // oldest opened first (waiting longest)
+    } else if (kind === 'noSla'){
+      rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null && r[6] == null; });
+      rows.sort(function(x,y){ return y[1] - x[1]; }); // mais recentes primeiro
     } else if (kind === 'tpaBucket'){
       rows = rowsScope.filter(function(r){ return r[2] !== null && r[2] >= bucket.min && r[2] < bucket.max; });
       rows.sort(function(x,y){ return y[1] - x[1]; }); // mais recentes primeiro
@@ -1353,6 +1365,20 @@
         row.push(summary, fmtDateFullBR(r[1]), fmtDurationShort(waitingMin));
         return row;
       });
+    } else if (kind === 'noSla'){
+      exportColumns = [{ header:'Chamado', key:'chamado', width:16 }];
+      if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
+      exportColumns.push(
+        { header:'Resumo', key:'resumo', width:55 },
+        { header:'Aberto em', key:'aberto', width:20 }
+      );
+      exportRows = rows.map(function(r){
+        var rSlot = r[0], key = r[4], summary = r[5] || '';
+        var row = [key];
+        if (isAll) row.push(analystBySlot(rSlot).short);
+        row.push(summary, fmtDateFullBR(r[1]));
+        return row;
+      });
     } else {
       exportColumns = [{ header:'Chamado', key:'chamado', width:16 }];
       if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
@@ -1370,29 +1396,45 @@
         return row;
       });
     }
+    var titleByKind = { pending:'Chamados pendentes de resposta', noSla:'Chamados sem tempo registrado', tpaBucket:('Chamados respondidos em ' + (bucket && bucket.label)) };
+    var filenameByKind = { pending:'pendentes_', noSla:'sem_tempo_', tpaBucket:('tpa_' + (bucket && bucket.slug) + '_') };
     lastDrilldownExport = {
-      title: (kind === 'pending' ? 'Chamados pendentes de resposta' : kind === 'tpaBucket' ? ('Chamados respondidos em ' + bucket.label) : 'Chamados com estouro de SLA') + ' - ' + scopeName,
-      filename: (kind === 'pending' ? 'pendentes_' : kind === 'tpaBucket' ? ('tpa_' + bucket.slug + '_') : 'estouro_sla_') + slotKey(slot) + '_' + ymd(Date.now()) + '.xlsx',
+      title: (titleByKind[kind] || 'Chamados com estouro de SLA') + ' - ' + scopeName,
+      filename: (filenameByKind[kind] || 'estouro_sla_') + slotKey(slot) + '_' + ymd(Date.now()) + '.xlsx',
       columns: exportColumns,
       rows: exportRows
     };
 
     var wrap = document.getElementById('breach-drilldown-wrap');
-    document.getElementById('breach-drilldown-title').textContent = kind === 'pending'
-      ? 'Chamados pendentes de resposta — ' + scopeName
-      : kind === 'tpaBucket'
-        ? 'Chamados respondidos em ' + bucket.label + ' — ' + scopeName
-        : 'Chamados com estouro de SLA — ' + scopeName;
+    document.getElementById('breach-drilldown-title').textContent = (titleByKind[kind] || 'Chamados com estouro de SLA') + ' — ' + scopeName;
     document.getElementById('breach-drilldown-desc').textContent = kind === 'pending'
       ? fmtInt(rows.length) + ' chamado(s) aguardando primeira resposta · ' + period.label.toLowerCase() + ' · ordenados do mais antigo para o mais recente'
-      : kind === 'tpaBucket'
-        ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
-        : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
+      : kind === 'noSla'
+        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
+        : kind === 'tpaBucket'
+          ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
+          : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
 
     var tableEl = document.getElementById('breach-drilldown-table');
     if (!rows.length){
-      var emptyMsg = kind === 'pending' ? 'Nenhum chamado pendente de resposta nesse período.' : kind === 'tpaBucket' ? 'Nenhum chamado respondido nessa faixa de tempo.' : 'Nenhum chamado com estouro nesse período.';
+      var emptyMsgByKind = { pending:'Nenhum chamado pendente de resposta nesse período.', noSla:'Nenhum chamado sem tempo registrado nesse período.', tpaBucket:'Nenhum chamado respondido nessa faixa de tempo.' };
+      var emptyMsg = emptyMsgByKind[kind] || 'Nenhum chamado com estouro nesse período.';
       tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>'+emptyMsg+'</p></div>';
+    } else if (kind === 'noSla'){
+      var body = rows.map(function(r){
+        var rSlot = r[0], key = r[4], summary = r[5] || '';
+        var analystCell = isAll ? '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(rSlot)+'"></span>'+analystBySlot(rSlot).short+'</td>' : '';
+        return '<tr>' +
+          '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
+          analystCell +
+          '<td class="summary-cell" title="'+escapeHtml(summary)+'">'+escapeHtml(summary)+'</td>' +
+          '<td class="num">'+fmtDateFullBR(r[1])+'</td>' +
+          '</tr>';
+      }).join('');
+      tableEl.innerHTML = '<table class="data-table"><thead><tr>' +
+        '<th style="text-align:left">Chamado</th>' + (isAll ? '<th style="text-align:left">Analista</th>' : '') +
+        '<th style="text-align:left">Resumo</th><th>Aberto em</th>' +
+        '</tr></thead><tbody>'+body+'</tbody></table>';
     } else if (kind === 'pending'){
       var nowMs = Date.now();
       var body = rows.map(function(r){
@@ -1541,7 +1583,8 @@
       { label:'Chamados', value: fmtInt(aggScope.ticket_count), sub: scopeLabel },
       { label:'TPA médio', value: aggScope.avg != null ? fmtMinShort(aggScope.avg) + ' min' : '—', sub: 'mediana ' + (aggScope.median != null ? fmtMinShort(aggScope.median) + ' min' : '—') },
       { label:'Estouro de SLA', value: aggScope.breach_rate_pct != null ? fmtPct(aggScope.breach_rate_pct) : '—', sub: fmtInt(aggScope.breached_count) + ' de ' + fmtInt(aggScope.ticket_count) + ' chamados' },
-      { label:'Pendentes de resposta', value: fmtInt(aggScope.pending_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' }
+      { label:'Pendentes de resposta', value: fmtInt(aggScope.pending_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' },
+      { label:'Sem tempo registrado', value: fmtInt(aggScope.no_sla_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' }
     ];
 
     // Ranking sempre com os 4 analistas (independente da aba selecionada), no
@@ -1835,15 +1878,18 @@
   function renderKPIs(rows, agg, scopeLabel, breachSlot, period, aggPrev){
     var breachClickable = agg.breached_count > 0;
     var pendingClickable = agg.pending_count > 0;
+    var noSlaClickable = agg.no_sla_count > 0;
     var deltaCount = aggPrev ? kpiDeltaHtml(agg.ticket_count, aggPrev.ticket_count, {mode:'neutral'}) : '';
     var deltaAvg = aggPrev ? kpiDeltaHtml(agg.avg, aggPrev.avg, {mode:'lowerBetter'}) : '';
     var deltaBreach = aggPrev ? kpiDeltaHtml(agg.breach_rate_pct, aggPrev.breach_rate_pct, {mode:'lowerBetter', points:true}) : '';
     var deltaPending = aggPrev ? kpiDeltaHtml(agg.pending_count, aggPrev.pending_count, {mode:'lowerBetter'}) : '';
+    var deltaNoSla = aggPrev ? kpiDeltaHtml(agg.no_sla_count, aggPrev.no_sla_count, {mode:'lowerBetter'}) : '';
     var kpis = [
       { label:'Chamados', value: fmtInt(agg.ticket_count), unit:'', sub: scopeLabel, delta: deltaCount },
       { label:'TPA médio', value: fmtMinShort(agg.avg), unit:'min', sub: 'mediana ' + fmtMinShort(agg.median) + ' min', delta: deltaAvg },
       { label:'Estouro de SLA', value: fmtMinShort(agg.breach_rate_pct), unit: agg.breach_rate_pct===null?'':'%', sub: fmtInt(agg.breached_count) + ' de ' + fmtInt(agg.ticket_count) + ' chamados · ' + statusFor(agg.breach_rate_pct).label, clickable: breachClickable, kind:'breach', slot: breachSlot, hint:'Ver chamados com estouro', delta: deltaBreach },
-      { label:'Pendentes de resposta', value: fmtInt(agg.pending_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: pendingClickable, kind:'pending', slot: breachSlot, hint:'Ver chamados pendentes', delta: deltaPending }
+      { label:'Pendentes de resposta', value: fmtInt(agg.pending_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: pendingClickable, kind:'pending', slot: breachSlot, hint:'Ver chamados pendentes', delta: deltaPending },
+      { label:'Sem tempo registrado', value: fmtInt(agg.no_sla_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados · sem ciclo de SLA', clickable: noSlaClickable, kind:'noSla', slot: breachSlot, hint:'Ver chamados sem tempo registrado', delta: deltaNoSla }
     ];
     document.getElementById('kpi-grid').innerHTML = kpis.map(function(k){
       var cls = 'kpi-tile' + (k.clickable ? ' clickable' : '');
