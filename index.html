@@ -1387,7 +1387,6 @@
       exportColumns = [{ header:'Chamado', key:'chamado', width:16 }];
       if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
       exportColumns.push(
-        { header:'Chamado principal', key:'principal', width:34 },
         { header:'Chamado vinculado', key:'vinculado', width:34 },
         { header:'Aberto em', key:'aberto', width:14 },
         { header:'Horas lançadas', key:'horas', width:16 }
@@ -1400,11 +1399,10 @@
       }
       exportRows = rows.map(function(r){
         var rSlot = r[0], key = r[4], loggedSec = r[9];
-        var parentKey = r[10], parentSummary = r[11] || '', linkedKey = r[12], linkedSummary = r[13] || '';
+        var linkedKey = r[12], linkedSummary = r[13] || '';
         var row = [key];
         if (isAll) row.push(analystBySlot(rSlot).short);
         row.push(
-          relatedExportCell(parentKey, parentSummary),
           relatedExportCell(linkedKey, linkedSummary),
           fmtDateFullBR(r[1]),
           (loggedSec ? fmtDurationShort(loggedSec / 60) : 'Sem apontamento')
@@ -1465,7 +1463,7 @@
       };
       var body = rows.map(function(r){
         var rSlot = r[0], key = r[4], loggedSec = r[9];
-        var parentKey = r[10], parentSummary = r[11] || '', linkedKey = r[12], linkedSummary = r[13] || '';
+        var linkedKey = r[12], linkedSummary = r[13] || '';
         var analystCell = isAll ? '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(rSlot)+'"></span>'+analystBySlot(rSlot).short+'</td>' : '';
         var horasCell = loggedSec
           ? fmtDurationShort(loggedSec/60)
@@ -1473,7 +1471,6 @@
         return '<tr>' +
           '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
           analystCell +
-          '<td class="linked-cell" style="text-align:left">'+relatedCellHtml(parentKey, parentSummary)+'</td>' +
           '<td class="linked-cell" style="text-align:left">'+relatedCellHtml(linkedKey, linkedSummary)+'</td>' +
           '<td class="num">'+fmtDateFullBR(r[1])+'</td>' +
           '<td class="num">'+horasCell+'</td>' +
@@ -1481,7 +1478,7 @@
       }).join('');
       tableEl.innerHTML = '<table class="data-table"><thead><tr>' +
         '<th style="text-align:left">Chamado</th>' + (isAll ? '<th style="text-align:left">Analista</th>' : '') +
-        '<th style="text-align:left">Chamado principal</th><th style="text-align:left">Chamado vinculado</th><th>Aberto em</th><th>Horas lançadas</th>' +
+        '<th style="text-align:left">Chamado vinculado</th><th>Aberto em</th><th>Horas lançadas</th>' +
         '</tr></thead><tbody>'+body+'</tbody></table>';
     } else if (kind === 'pending'){
       var nowMs = Date.now();
