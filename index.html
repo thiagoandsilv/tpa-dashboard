@@ -1055,6 +1055,15 @@
     }
     return key != null ? TICKET_BY_KEY[key] : undefined;
   }
+  // Um chamado conta como "já tratado" (não precisa de aviso/prioridade extra)
+  // quando tem hora de worklog lançada (t[9]) OU já rodou um ciclo de SLA —
+  // completo ou em andamento (t[6], goalMinutes, só existe nesses dois casos).
+  // Exemplo real: SUPORTE-87647 (vinculado de SUPORTE-87659) não tem hora
+  // lançada, mas tem SLA cumprido em ~4min — foi atendido normalmente, então
+  // não deve gerar aviso nem contar como "chamado esquecido".
+  function ticketTreated(t){
+    return !!(t && (t[9] || t[6] != null));
+  }
 
   // Ordem de exibição conhecida do esquema de prioridade do Jira. Qualquer valor
   // que apareça nos dados e não esteja nessa lista é anexado ao final, na ordem
@@ -1361,12 +1370,14 @@
       rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null && r[6] == null; });
       // Ordem pedida: 1) chamado sem hora lançada própria primeiro (mais
       // urgente — ninguém apontou trabalho nele); 2) dentro disso, o chamado
-      // vinculado com hora lançada vem antes (já tem algum sinal de trabalho
-      // registrado em algum lugar). Empate: mais recente primeiro.
+      // cujo vinculado já foi tratado (hora lançada OU ciclo de SLA cumprido —
+      // ex.: SUPORTE-87647, sem hora mas com SLA cumprido em ~4min) vem antes,
+      // por já ter algum sinal de trabalho registrado em algum lugar. Empate:
+      // mais recente primeiro.
       var noSlaSortKey = function(t){
         var ownNoHours = t[9] ? 1 : 0; // 0 = sem hora própria (prioridade)
         var linkedT = t[12] ? ticketByKey(t[12]) : null;
-        var linkedNoHours = (linkedT && linkedT[9]) ? 0 : 1; // 0 = vinculado tem hora (prioridade)
+        var linkedNoHours = (linkedT && ticketTreated(linkedT)) ? 0 : 1; // 0 = vinculado já tratado (hora lançada ou SLA cumprido) — prioridade
         return [ownNoHours, linkedNoHours];
       };
       rows.sort(function(x,y){
@@ -1412,8 +1423,8 @@
       function relatedExportCell(relKey, relSummary){
         if (!relKey) return '';
         var relT = ticketByKey(relKey);
-        var relNoHours = relT ? !relT[9] : false;
-        return relKey + (relSummary ? ' - ' + relSummary : '') + (relNoHours ? ' [sem horas lançadas]' : '');
+        var relUntreated = relT ? !ticketTreated(relT) : false;
+        return relKey + (relSummary ? ' - ' + relSummary : '') + (relUntreated ? ' [sem horas lançadas nem SLA cumprido]' : '');
       }
       exportRows = rows.map(function(r){
         var rSlot = r[0], key = r[4], loggedSec = r[9];
@@ -1458,7 +1469,7 @@
     document.getElementById('breach-drilldown-desc').textContent = kind === 'pending'
       ? fmtInt(rows.length) + ' chamado(s) aguardando primeira resposta · ' + period.label.toLowerCase() + ' · ordenados do mais antigo para o mais recente'
       : kind === 'noSla'
-        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada primeiro, depois vinculado com hora lançada'
+        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada primeiro, depois vinculado já tratado'
         : kind === 'tpaBucket'
           ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
           : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
@@ -1472,10 +1483,10 @@
       var relatedCellHtml = function(relKey, relSummary){
         if (!relKey) return '<span class="muted">—</span>';
         var relT = ticketByKey(relKey);
-        var relNoHours = relT ? !relT[9] : false; // só sinaliza quando o chamado relacionado está nos dados carregados
+        var relUntreated = relT ? !ticketTreated(relT) : false; // só sinaliza quando o chamado relacionado está nos dados carregados
         var relTitle = relSummary ? escapeHtml(relSummary) : '';
-        var warnIcon = relNoHours
-          ? ' <span class="link-warn" title="'+(relTitle ? relTitle+' — ' : '')+'chamado sem horas lançadas">&#9888;</span>'
+        var warnIcon = relUntreated
+          ? ' <span class="link-warn" title="'+(relTitle ? relTitle+' — ' : '')+'chamado sem horas lançadas e sem SLA cumprido">&#9888;</span>'
           : '';
         return '<a class="ticket-link mono" href="'+jiraUrl(relKey)+'" target="_blank" rel="noopener noreferrer" title="'+relTitle+'">'+escapeHtml(relKey)+'</a>' + warnIcon;
       };
