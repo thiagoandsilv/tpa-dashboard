@@ -78,6 +78,12 @@ function issueToTuple(issue, slot) {
   const summary = String((issue.fields && issue.fields.summary) || "").slice(0, 220);
   const createdMs = new Date(issue.fields.created).getTime();
   const priority = (issue.fields && issue.fields.priority && issue.fields.priority.name) || null;
+  // Horas apontadas (worklog) no próprio chamado, independente do ciclo de SLA —
+  // usa o rollup (inclui subtarefas) quando existir, senão cai pro tempo direto do issue.
+  const loggedSec =
+    (issue.fields && typeof issue.fields.aggregatetimespent === "number" && issue.fields.aggregatetimespent) ||
+    (issue.fields && typeof issue.fields.timespent === "number" && issue.fields.timespent) ||
+    null;
 
   let elapsedMin = null;
   let breached = null;
@@ -109,7 +115,7 @@ function issueToTuple(issue, slot) {
     }
   }
 
-  return [slot, createdMs, elapsedMin, breached, key, summary, goalMin, ongoingBreachMs, priority];
+  return [slot, createdMs, elapsedMin, breached, key, summary, goalMin, ongoingBreachMs, priority, loggedSec];
 }
 
 async function pullAllTickets(onProgress) {
@@ -123,7 +129,7 @@ async function pullAllTickets(onProgress) {
     " AND assignee in (" + accountIds + ")" +
     " AND created >= -" + WINDOW_DAYS + "d" +
     " ORDER BY created DESC";
-  const fields = ["summary", "created", "customfield_10121", "assignee", "priority"];
+  const fields = ["summary", "created", "customfield_10121", "assignee", "priority", "timespent", "aggregatetimespent"];
 
   const tickets = [];
   let nextPageToken;

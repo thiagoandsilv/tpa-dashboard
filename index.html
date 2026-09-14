@@ -752,6 +752,8 @@
   table.data-table td.num{ font-family:"IBM Plex Mono", monospace; }
   table.data-table tbody tr:hover{ background:var(--accent-wash); }
   .swatch-inline{ display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:7px; }
+  .muted{ color:var(--text-muted); }
+  .badge-worked{ color:var(--status-warning); font-weight:600; font-family:"IBM Plex Mono", monospace; }
 
   /* ---------- Empty state ---------- */
   .empty-state{
@@ -1030,11 +1032,14 @@
 (function(){
   "use strict";
 
-  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null, priority|null]
+  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null, priority|null, loggedTimeSeconds|null]
      ongoingBreachEpochMs is set only for tickets still awaiting first response — the exact
      wall-clock moment their SLA cycle will breach (used by the "SLA" watch tab).
      priority (t[8]) vem direto do campo "Prioridade" do Jira (ex.: "Muito Alto", "Alto",
-     "Médio", "Baixo", "Muito Baixo") — usado pelo filtro global de prioridade. */
+     "Médio", "Baixo", "Muito Baixo") — usado pelo filtro global de prioridade.
+     loggedTimeSeconds (t[9]) é o tempo de trabalho (worklog) já apontado no chamado, em
+     segundos — existe independente do ciclo de SLA, então permite ver se um chamado
+     "Sem tempo registrado" já foi de fato trabalhado por algum analista. */
   var TICKETS = [];
   var META = null;
 
@@ -1370,13 +1375,14 @@
       if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
       exportColumns.push(
         { header:'Resumo', key:'resumo', width:55 },
-        { header:'Aberto em', key:'aberto', width:20 }
+        { header:'Aberto em', key:'aberto', width:20 },
+        { header:'Horas lançadas', key:'horas', width:16 }
       );
       exportRows = rows.map(function(r){
-        var rSlot = r[0], key = r[4], summary = r[5] || '';
+        var rSlot = r[0], key = r[4], summary = r[5] || '', loggedSec = r[9];
         var row = [key];
         if (isAll) row.push(analystBySlot(rSlot).short);
-        row.push(summary, fmtDateFullBR(r[1]));
+        row.push(summary, fmtDateFullBR(r[1]), (loggedSec ? fmtDurationShort(loggedSec / 60) : 'Sem apontamento'));
         return row;
       });
     } else {
@@ -1422,18 +1428,22 @@
       tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>'+emptyMsg+'</p></div>';
     } else if (kind === 'noSla'){
       var body = rows.map(function(r){
-        var rSlot = r[0], key = r[4], summary = r[5] || '';
+        var rSlot = r[0], key = r[4], summary = r[5] || '', loggedSec = r[9];
         var analystCell = isAll ? '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(rSlot)+'"></span>'+analystBySlot(rSlot).short+'</td>' : '';
+        var horasCell = loggedSec
+          ? '<span class="badge-worked" title="Tem apontamento de horas, mesmo sem ciclo de SLA">'+fmtDurationShort(loggedSec/60)+'</span>'
+          : '<span class="muted">Sem apontamento</span>';
         return '<tr>' +
           '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
           analystCell +
           '<td class="summary-cell" title="'+escapeHtml(summary)+'">'+escapeHtml(summary)+'</td>' +
           '<td class="num">'+fmtDateFullBR(r[1])+'</td>' +
+          '<td class="num">'+horasCell+'</td>' +
           '</tr>';
       }).join('');
       tableEl.innerHTML = '<table class="data-table"><thead><tr>' +
         '<th style="text-align:left">Chamado</th>' + (isAll ? '<th style="text-align:left">Analista</th>' : '') +
-        '<th style="text-align:left">Resumo</th><th>Aberto em</th>' +
+        '<th style="text-align:left">Resumo</th><th>Aberto em</th><th>Horas lançadas</th>' +
         '</tr></thead><tbody>'+body+'</tbody></table>';
     } else if (kind === 'pending'){
       var nowMs = Date.now();
