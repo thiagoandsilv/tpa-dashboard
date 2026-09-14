@@ -1038,13 +1038,13 @@
      "Médio", "Baixo", "Muito Baixo") — usado pelo filtro global de prioridade.
      loggedTimeSeconds (t[9]) é o tempo de trabalho (worklog) já apontado no chamado, em
      segundos — existe independente do ciclo de SLA, então permite ver se um chamado
-     "Sem ciclo de SLA" já foi de fato trabalhado por algum analista.
+     "Sem hora lançada" já foi de fato trabalhado por algum analista.
      parentKey/parentSummary (t[10]/t[11]) vêm do campo "parent" nativo do Jira —
      só existe quando o chamado é de fato uma Subtarefa (hierarquia real).
      linkedKey/linkedSummary (t[12]/t[13]) vêm do vínculo (issue link) do Jira — muito
      comum em chamados Interno (que não têm "parent") apontarem pro chamado "de
      verdade" (Zabbix/Solicitação) pro qual aquele trabalho foi feito. Pra saber se um
-     chamado "Sem ciclo de SLA" já foi trabalhado, o que importa é só o Registro de
+     chamado "Sem hora lançada" já foi trabalhado, o que importa é só o Registro de
      Atividades (worklog) do Jira — nunca o ciclo de SLA: ver noSlaRowInfo(), que
      olha a hora própria e, na falta dela, a hora lançada no vinculado (t[12]). O mesmo
      noSlaRowInfo() também decide qual dos dois é o "chamado principal" pra exibição: é
@@ -1060,7 +1060,7 @@
     }
     return key != null ? TICKET_BY_KEY[key] : undefined;
   }
-  // Reúne, pra uma linha da lista "Sem ciclo de SLA", tudo que depende do par
+  // Reúne, pra uma linha da lista "Sem hora lançada", tudo que depende do par
   // chamado/vinculado:
   //  - Qual dos dois é o "chamado principal" pra exibição: sempre o de data de
   //    criação MAIS ANTIGA (o chamado Interno normalmente é aberto depois, pra
@@ -1305,12 +1305,13 @@
     // Sem primeira resposta ainda (r[2]===null) tem dois casos bem diferentes:
     // um ciclo de SLA em andamento, com meta (r[6]!=null) — está de fato
     // aguardando resposta e conta pra "Pendentes"; ou nenhum ciclo de SLA
-    // registrado (r[6]==null) — o chamado nunca teve o TPA medido (ex.: tipo
-    // de chamado sem SLA configurado), o que é um problema de dado, não de
-    // atendimento, então entra à parte em "Sem ciclo de SLA" (card renomeado
-    // de "Sem tempo registrado" pra não ser confundido com a coluna "Horas
-    // lançadas" — um chamado pode ter horas de trabalho lançadas e mesmo assim
-    // nunca ter tido um ciclo de SLA de 1ª resposta).
+    // registrado (r[6]==null, ex.: tipo de chamado sem SLA configurado). Esse
+    // segundo grupo vira o card "Sem hora lançada": o que importa pra quem
+    // olha esse card NÃO é o ciclo de SLA (isso é só o filtro técnico usado
+    // pra achar esse grupo) — é se alguém de fato lançou hora de trabalho
+    // nesse chamado ou no vinculado dele (ver noSlaRowInfo()). Um chamado
+    // desse grupo pode ter hora lançada perfeitamente normal; só não teve o
+    // TPA (1ª resposta) medido pelo SLA.
     var notResponded = rows.filter(function(r){ return r[2] === null; });
     var pendingRows = notResponded.filter(function(r){ return r[6] != null; });
     var noSlaRows = notResponded.filter(function(r){ return r[6] == null; });
@@ -1478,8 +1479,8 @@
         return row;
       });
     }
-    var titleByKind = { pending:'Chamados pendentes de resposta', noSla:'Chamados sem ciclo de SLA', tpaBucket:('Chamados respondidos em ' + (bucket && bucket.label)) };
-    var filenameByKind = { pending:'pendentes_', noSla:'sem_sla_', tpaBucket:('tpa_' + (bucket && bucket.slug) + '_') };
+    var titleByKind = { pending:'Chamados pendentes de resposta', noSla:'Chamados sem hora lançada', tpaBucket:('Chamados respondidos em ' + (bucket && bucket.label)) };
+    var filenameByKind = { pending:'pendentes_', noSla:'sem_hora_lancada_', tpaBucket:('tpa_' + (bucket && bucket.slug) + '_') };
     lastDrilldownExport = {
       title: (titleByKind[kind] || 'Chamados com estouro de SLA') + ' - ' + scopeName,
       filename: (filenameByKind[kind] || 'estouro_sla_') + slotKey(slot) + '_' + ymd(Date.now()) + '.xlsx',
@@ -1492,14 +1493,14 @@
     document.getElementById('breach-drilldown-desc').textContent = kind === 'pending'
       ? fmtInt(rows.length) + ' chamado(s) aguardando primeira resposta · ' + period.label.toLowerCase() + ' · ordenados do mais antigo para o mais recente'
       : kind === 'noSla'
-        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada em lugar nenhum primeiro'
+        ? fmtInt(rows.length) + ' chamado(s) sem hora lançada · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada em lugar nenhum primeiro'
         : kind === 'tpaBucket'
           ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
           : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
 
     var tableEl = document.getElementById('breach-drilldown-table');
     if (!rows.length){
-      var emptyMsgByKind = { pending:'Nenhum chamado pendente de resposta nesse período.', noSla:'Nenhum chamado sem ciclo de SLA nesse período.', tpaBucket:'Nenhum chamado respondido nessa faixa de tempo.' };
+      var emptyMsgByKind = { pending:'Nenhum chamado pendente de resposta nesse período.', noSla:'Nenhum chamado sem hora lançada nesse período.', tpaBucket:'Nenhum chamado respondido nessa faixa de tempo.' };
       var emptyMsg = emptyMsgByKind[kind] || 'Nenhum chamado com estouro nesse período.';
       tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>'+emptyMsg+'</p></div>';
     } else if (kind === 'noSla'){
@@ -1676,7 +1677,7 @@
       { label:'TPA médio', value: aggScope.avg != null ? fmtMinShort(aggScope.avg) + ' min' : '—', sub: 'mediana ' + (aggScope.median != null ? fmtMinShort(aggScope.median) + ' min' : '—') },
       { label:'Estouro de SLA', value: aggScope.breach_rate_pct != null ? fmtPct(aggScope.breach_rate_pct) : '—', sub: fmtInt(aggScope.breached_count) + ' de ' + fmtInt(aggScope.ticket_count) + ' chamados' },
       { label:'Pendentes de resposta', value: fmtInt(aggScope.pending_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' },
-      { label:'Sem ciclo de SLA', value: fmtInt(aggScope.no_sla_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' }
+      { label:'Sem hora lançada', value: fmtInt(aggScope.no_sla_count), sub: 'de ' + fmtInt(aggScope.ticket_count) + ' chamados' }
     ];
 
     // Ranking sempre com os 4 analistas (independente da aba selecionada), no
@@ -1982,7 +1983,7 @@
       { label:'TPA médio', value: fmtMinShort(agg.avg), unit:'min', sub: 'mediana ' + fmtMinShort(agg.median) + ' min', delta: deltaAvg },
       { label:'Estouro de SLA', value: fmtMinShort(agg.breach_rate_pct), unit: agg.breach_rate_pct===null?'':'%', sub: fmtInt(agg.breached_count) + ' de ' + fmtInt(agg.ticket_count) + ' chamados · ' + statusFor(agg.breach_rate_pct).label, clickable: breachClickable, kind:'breach', slot: breachSlot, hint:'Ver chamados com estouro', delta: deltaBreach },
       { label:'Pendentes de resposta', value: fmtInt(agg.pending_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: pendingClickable, kind:'pending', slot: breachSlot, hint:'Ver chamados pendentes', delta: deltaPending },
-      { label:'Sem ciclo de SLA', value: fmtInt(agg.no_sla_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados · sem 1ª resposta cronometrada', clickable: noSlaClickable, kind:'noSla', slot: breachSlot, hint:'Ver chamados sem ciclo de SLA', delta: deltaNoSla }
+      { label:'Sem hora lançada', value: fmtInt(agg.no_sla_count), unit:'', sub: 'de ' + fmtInt(agg.ticket_count) + ' chamados', clickable: noSlaClickable, kind:'noSla', slot: breachSlot, hint:'Ver chamados sem hora lançada', delta: deltaNoSla }
     ];
     document.getElementById('kpi-grid').innerHTML = kpis.map(function(k){
       var cls = 'kpi-tile' + (k.clickable ? ' clickable' : '');
