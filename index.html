@@ -748,12 +748,12 @@
     text-transform:uppercase;
     border-bottom:1px solid var(--border-strong);
   }
-  table.data-table td.name-cell{ font-weight:500; }
+  table.data-table td.name-cell{ font-weight:500; text-align:left; }
   table.data-table td.num{ font-family:"IBM Plex Mono", monospace; }
   table.data-table tbody tr:hover{ background:var(--accent-wash); }
   .swatch-inline{ display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:7px; }
   .muted{ color:var(--text-muted); }
-  .badge-worked{ color:var(--status-warning); font-weight:600; font-family:"IBM Plex Mono", monospace; }
+  .link-warn{ color:var(--status-warning); font-size:11px; cursor:help; }
 
   /* ---------- Empty state ---------- */
   .empty-state{
@@ -1032,16 +1032,29 @@
 (function(){
   "use strict";
 
-  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null, priority|null, loggedTimeSeconds|null]
+  /* TICKETS: [slot, createdEpochMs, elapsedMinutes|null, breached(1|0|null), key, summary, goalMinutes|null, ongoingBreachEpochMs|null, priority|null, loggedTimeSeconds|null, parentKey|null, parentSummary|null, linkedKey|null, linkedSummary|null]
      ongoingBreachEpochMs is set only for tickets still awaiting first response — the exact
      wall-clock moment their SLA cycle will breach (used by the "SLA" watch tab).
      priority (t[8]) vem direto do campo "Prioridade" do Jira (ex.: "Muito Alto", "Alto",
      "Médio", "Baixo", "Muito Baixo") — usado pelo filtro global de prioridade.
      loggedTimeSeconds (t[9]) é o tempo de trabalho (worklog) já apontado no chamado, em
      segundos — existe independente do ciclo de SLA, então permite ver se um chamado
-     "Sem tempo registrado" já foi de fato trabalhado por algum analista. */
+     "Sem tempo registrado" já foi de fato trabalhado por algum analista.
+     parentKey/parentSummary (t[10]/t[11]) vêm do campo "parent" nativo do Jira —
+     só existe quando o chamado é de fato uma Subtarefa (hierarquia real).
+     linkedKey/linkedSummary (t[12]/t[13]) vêm do vínculo (issue link) do Jira — muito
+     comum em chamados Interno (que não têm "parent") apontarem pro chamado "de
+     verdade" (Zabbix/Solicitação) pro qual aquele trabalho foi feito. */
   var TICKETS = [];
   var META = null;
+  var TICKET_BY_KEY = null; // cache: chamado (key) -> tupla em TICKETS, reconstruído a cada applyData()
+  function ticketByKey(key){
+    if (!TICKET_BY_KEY){
+      TICKET_BY_KEY = {};
+      for (var i = 0; i < TICKETS.length; i++){ TICKET_BY_KEY[TICKETS[i][4]] = TICKETS[i]; }
+    }
+    return key != null ? TICKET_BY_KEY[key] : undefined;
+  }
 
   // Ordem de exibição conhecida do esquema de prioridade do Jira. Qualquer valor
   // que apareça nos dados e não esteja nessa lista é anexado ao final, na ordem
@@ -1374,15 +1387,28 @@
       exportColumns = [{ header:'Chamado', key:'chamado', width:16 }];
       if (isAll) exportColumns.push({ header:'Analista', key:'analista', width:24 });
       exportColumns.push(
-        { header:'Resumo', key:'resumo', width:55 },
-        { header:'Aberto em', key:'aberto', width:20 },
+        { header:'Chamado principal', key:'principal', width:34 },
+        { header:'Chamado vinculado', key:'vinculado', width:34 },
+        { header:'Aberto em', key:'aberto', width:14 },
         { header:'Horas lançadas', key:'horas', width:16 }
       );
+      function relatedExportCell(relKey, relSummary){
+        if (!relKey) return '';
+        var relT = ticketByKey(relKey);
+        var relNoHours = relT ? !relT[9] : false;
+        return relKey + (relSummary ? ' - ' + relSummary : '') + (relNoHours ? ' [sem horas lançadas]' : '');
+      }
       exportRows = rows.map(function(r){
-        var rSlot = r[0], key = r[4], summary = r[5] || '', loggedSec = r[9];
+        var rSlot = r[0], key = r[4], loggedSec = r[9];
+        var parentKey = r[10], parentSummary = r[11] || '', linkedKey = r[12], linkedSummary = r[13] || '';
         var row = [key];
         if (isAll) row.push(analystBySlot(rSlot).short);
-        row.push(summary, fmtDateFullBR(r[1]), (loggedSec ? fmtDurationShort(loggedSec / 60) : 'Sem apontamento'));
+        row.push(
+          relatedExportCell(parentKey, parentSummary),
+          relatedExportCell(linkedKey, linkedSummary),
+          fmtDateFullBR(r[1]),
+          (loggedSec ? fmtDurationShort(loggedSec / 60) : 'Sem apontamento')
+        );
         return row;
       });
     } else {
@@ -1427,23 +1453,35 @@
       var emptyMsg = emptyMsgByKind[kind] || 'Nenhum chamado com estouro nesse período.';
       tableEl.innerHTML = '<div class="empty-state" style="padding:20px;"><p>'+emptyMsg+'</p></div>';
     } else if (kind === 'noSla'){
+      var relatedCellHtml = function(relKey, relSummary){
+        if (!relKey) return '<span class="muted">—</span>';
+        var relT = ticketByKey(relKey);
+        var relNoHours = relT ? !relT[9] : false; // só sinaliza quando o chamado relacionado está nos dados carregados
+        var relTitle = relSummary ? escapeHtml(relSummary) : '';
+        var warnIcon = relNoHours
+          ? ' <span class="link-warn" title="'+(relTitle ? relTitle+' — ' : '')+'chamado sem horas lançadas">&#9888;</span>'
+          : '';
+        return '<a class="ticket-link mono" href="'+jiraUrl(relKey)+'" target="_blank" rel="noopener noreferrer" title="'+relTitle+'">'+escapeHtml(relKey)+'</a>' + warnIcon;
+      };
       var body = rows.map(function(r){
-        var rSlot = r[0], key = r[4], summary = r[5] || '', loggedSec = r[9];
+        var rSlot = r[0], key = r[4], loggedSec = r[9];
+        var parentKey = r[10], parentSummary = r[11] || '', linkedKey = r[12], linkedSummary = r[13] || '';
         var analystCell = isAll ? '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(rSlot)+'"></span>'+analystBySlot(rSlot).short+'</td>' : '';
         var horasCell = loggedSec
-          ? '<span class="badge-worked" title="Tem apontamento de horas, mesmo sem ciclo de SLA">'+fmtDurationShort(loggedSec/60)+'</span>'
+          ? fmtDurationShort(loggedSec/60)
           : '<span class="muted">Sem apontamento</span>';
         return '<tr>' +
           '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
           analystCell +
-          '<td class="summary-cell" title="'+escapeHtml(summary)+'">'+escapeHtml(summary)+'</td>' +
+          '<td class="linked-cell" style="text-align:left">'+relatedCellHtml(parentKey, parentSummary)+'</td>' +
+          '<td class="linked-cell" style="text-align:left">'+relatedCellHtml(linkedKey, linkedSummary)+'</td>' +
           '<td class="num">'+fmtDateFullBR(r[1])+'</td>' +
           '<td class="num">'+horasCell+'</td>' +
           '</tr>';
       }).join('');
       tableEl.innerHTML = '<table class="data-table"><thead><tr>' +
         '<th style="text-align:left">Chamado</th>' + (isAll ? '<th style="text-align:left">Analista</th>' : '') +
-        '<th style="text-align:left">Resumo</th><th>Aberto em</th><th>Horas lançadas</th>' +
+        '<th style="text-align:left">Chamado principal</th><th style="text-align:left">Chamado vinculado</th><th>Aberto em</th><th>Horas lançadas</th>' +
         '</tr></thead><tbody>'+body+'</tbody></table>';
     } else if (kind === 'pending'){
       var nowMs = Date.now();
@@ -1760,6 +1798,7 @@
 
   function applyData(data){
     TICKETS = data.tickets || [];
+    TICKET_BY_KEY = null;
     META = data.meta || { generated_at: new Date().toISOString(), source_project: '', site_host: '', window_days: 0 };
     if (TICKETS.length){
       datasetMin = Math.min.apply(null, TICKETS.map(function(t){return t[1];}));

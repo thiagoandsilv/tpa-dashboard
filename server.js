@@ -85,6 +85,34 @@ function issueToTuple(issue, slot) {
     (issue.fields && typeof issue.fields.timespent === "number" && issue.fields.timespent) ||
     null;
 
+  // Chamado principal: quando o issue é uma Subtarefa de verdade (hierarquia
+  // nativa do Jira), esse é o campo "parent" — o chamado "pai" no sentido
+  // literal do Jira.
+  let parentKey = null;
+  let parentSummary = null;
+  const parentIssue = issue.fields && issue.fields.parent;
+  if (parentIssue) {
+    parentKey = parentIssue.key || null;
+    parentSummary = String((parentIssue.fields && parentIssue.fields.summary) || "").slice(0, 220) || null;
+  }
+
+  // Chamado vinculado: tickets do tipo Interno (que não são Subtarefa de verdade,
+  // não têm "parent") costumam estar linkados (issue link) ao chamado "de verdade"
+  // (o Zabbix/Solicitação do cliente) pra o qual aquele trabalho interno foi feito.
+  // Prioriza um vínculo do tipo "Interno" (é como o time já usa esse link no Jira);
+  // na falta dele, usa o primeiro vínculo que existir. Sem vínculo nenhum, fica null.
+  let linkedKey = null;
+  let linkedSummary = null;
+  const links = (issue.fields && Array.isArray(issue.fields.issuelinks)) ? issue.fields.issuelinks : [];
+  if (links.length > 0) {
+    const preferred = links.find(function (l) { return l.type && l.type.name === "Interno"; }) || links[0];
+    const linkedIssue = preferred.inwardIssue || preferred.outwardIssue;
+    if (linkedIssue) {
+      linkedKey = linkedIssue.key || null;
+      linkedSummary = String((linkedIssue.fields && linkedIssue.fields.summary) || "").slice(0, 220) || null;
+    }
+  }
+
   let elapsedMin = null;
   let breached = null;
   let goalMin = null;
@@ -115,7 +143,7 @@ function issueToTuple(issue, slot) {
     }
   }
 
-  return [slot, createdMs, elapsedMin, breached, key, summary, goalMin, ongoingBreachMs, priority, loggedSec];
+  return [slot, createdMs, elapsedMin, breached, key, summary, goalMin, ongoingBreachMs, priority, loggedSec, parentKey, parentSummary, linkedKey, linkedSummary];
 }
 
 async function pullAllTickets(onProgress) {
@@ -129,7 +157,7 @@ async function pullAllTickets(onProgress) {
     " AND assignee in (" + accountIds + ")" +
     " AND created >= -" + WINDOW_DAYS + "d" +
     " ORDER BY created DESC";
-  const fields = ["summary", "created", "customfield_10121", "assignee", "priority", "timespent", "aggregatetimespent"];
+  const fields = ["summary", "created", "customfield_10121", "assignee", "priority", "timespent", "aggregatetimespent", "issuelinks", "parent"];
 
   const tickets = [];
   let nextPageToken;
