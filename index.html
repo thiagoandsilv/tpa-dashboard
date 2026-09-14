@@ -753,7 +753,6 @@
   table.data-table tbody tr:hover{ background:var(--accent-wash); }
   .swatch-inline{ display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:7px; }
   .muted{ color:var(--text-muted); }
-  .link-warn{ color:var(--status-warning); font-size:11px; cursor:help; }
 
   /* ---------- Empty state ---------- */
   .empty-state{
@@ -1044,7 +1043,10 @@
      só existe quando o chamado é de fato uma Subtarefa (hierarquia real).
      linkedKey/linkedSummary (t[12]/t[13]) vêm do vínculo (issue link) do Jira — muito
      comum em chamados Interno (que não têm "parent") apontarem pro chamado "de
-     verdade" (Zabbix/Solicitação) pro qual aquele trabalho foi feito. */
+     verdade" (Zabbix/Solicitação) pro qual aquele trabalho foi feito. Pra saber se um
+     chamado "Sem ciclo de SLA" já foi trabalhado, o que importa é só o Registro de
+     Atividades (worklog) do Jira — nunca o ciclo de SLA: ver ownOrLinkedHours(), que
+     olha a hora própria (t[9]) e, na falta dela, a hora lançada no vinculado (t[12]). */
   var TICKETS = [];
   var META = null;
   var TICKET_BY_KEY = null; // cache: chamado (key) -> tupla em TICKETS, reconstruído a cada applyData()
@@ -1055,14 +1057,21 @@
     }
     return key != null ? TICKET_BY_KEY[key] : undefined;
   }
-  // Um chamado conta como "já tratado" (não precisa de aviso/prioridade extra)
-  // quando tem hora de worklog lançada (t[9]) OU já rodou um ciclo de SLA —
-  // completo ou em andamento (t[6], goalMinutes, só existe nesses dois casos).
-  // Exemplo real: SUPORTE-87647 (vinculado de SUPORTE-87659) não tem hora
-  // lançada, mas tem SLA cumprido em ~4min — foi atendido normalmente, então
-  // não deve gerar aviso nem contar como "chamado esquecido".
-  function ticketTreated(t){
-    return !!(t && (t[9] || t[6] != null));
+  // O que importa pra saber se um chamado "sem ciclo de SLA" já foi trabalhado
+  // é exclusivamente o Registro de Atividades do Jira (worklog/horas
+  // lançadas) — não o ciclo de SLA. Primeiro olha a hora lançada no próprio
+  // chamado; se não tiver, cai pra hora lançada no chamado vinculado (comum
+  // em chamados Interno, cujo trabalho às vezes é apontado no chamado
+  // "de verdade" — Zabbix/Solicitação — em vez de no Interno em si).
+  // Só quando nem um nem outro tem hora lançada é que o chamado conta como
+  // "sem apontamento nenhum".
+  function ownOrLinkedHours(t){
+    var ownSec = t[9] || null;
+    if (ownSec) return { sec: ownSec, viaLinked: false };
+    var linkedT = t[12] ? ticketByKey(t[12]) : null;
+    var linkedSec = linkedT ? (linkedT[9] || null) : null;
+    if (linkedSec) return { sec: linkedSec, viaLinked: true };
+    return { sec: null, viaLinked: false };
   }
 
   // Ordem de exibição conhecida do esquema de prioridade do Jira. Qualquer valor
@@ -1368,22 +1377,14 @@
       rows.sort(function(x,y){ return x[1] - y[1]; }); // oldest opened first (waiting longest)
     } else if (kind === 'noSla'){
       rows = rowsScope.filter(function(r){ return (isAll || r[0] === slot) && r[2] === null && r[6] == null; });
-      // Ordem pedida: 1) chamado sem hora lançada própria primeiro (mais
-      // urgente — ninguém apontou trabalho nele); 2) dentro disso, o chamado
-      // cujo vinculado já foi tratado (hora lançada OU ciclo de SLA cumprido —
-      // ex.: SUPORTE-87647, sem hora mas com SLA cumprido em ~4min) vem antes,
-      // por já ter algum sinal de trabalho registrado em algum lugar. Empate:
-      // mais recente primeiro.
-      var noSlaSortKey = function(t){
-        var ownNoHours = t[9] ? 1 : 0; // 0 = sem hora própria (prioridade)
-        var linkedT = t[12] ? ticketByKey(t[12]) : null;
-        var linkedNoHours = (linkedT && ticketTreated(linkedT)) ? 0 : 1; // 0 = vinculado já tratado (hora lançada ou SLA cumprido) — prioridade
-        return [ownNoHours, linkedNoHours];
-      };
+      // Ordem: chamados sem NENHUMA hora lançada (nem no próprio, nem no
+      // vinculado — o pior caso, ninguém apontou trabalho em lugar nenhum)
+      // vêm primeiro; os demais (hora própria ou, na falta dela, hora do
+      // vinculado) vêm depois. Empate: mais recente primeiro.
       rows.sort(function(x,y){
-        var kx = noSlaSortKey(x), ky = noSlaSortKey(y);
-        if (kx[0] !== ky[0]) return kx[0] - ky[0];
-        if (kx[1] !== ky[1]) return kx[1] - ky[1];
+        var xNoHours = ownOrLinkedHours(x).sec ? 1 : 0; // 0 = sem hora em lugar nenhum (prioridade)
+        var yNoHours = ownOrLinkedHours(y).sec ? 1 : 0;
+        if (xNoHours !== yNoHours) return xNoHours - yNoHours;
         return y[1] - x[1]; // desempate: mais recente primeiro
       });
     } else if (kind === 'tpaBucket'){
@@ -1422,19 +1423,20 @@
       );
       function relatedExportCell(relKey, relSummary){
         if (!relKey) return '';
-        var relT = ticketByKey(relKey);
-        var relUntreated = relT ? !ticketTreated(relT) : false;
-        return relKey + (relSummary ? ' - ' + relSummary : '') + (relUntreated ? ' [sem horas lançadas nem SLA cumprido]' : '');
+        return relKey + (relSummary ? ' - ' + relSummary : '');
       }
       exportRows = rows.map(function(r){
-        var rSlot = r[0], key = r[4], loggedSec = r[9];
+        var rSlot = r[0], key = r[4];
         var linkedKey = r[12], linkedSummary = r[13] || '';
+        var hoursInfo = ownOrLinkedHours(r);
         var row = [key];
         if (isAll) row.push(analystBySlot(rSlot).short);
         row.push(
           relatedExportCell(linkedKey, linkedSummary),
           fmtDateFullBR(r[1]),
-          (loggedSec ? fmtDurationShort(loggedSec / 60) : 'Sem apontamento')
+          hoursInfo.sec
+            ? fmtDurationShort(hoursInfo.sec / 60) + (hoursInfo.viaLinked ? ' (apontado no chamado vinculado)' : '')
+            : 'Sem apontamento'
         );
         return row;
       });
@@ -1469,7 +1471,7 @@
     document.getElementById('breach-drilldown-desc').textContent = kind === 'pending'
       ? fmtInt(rows.length) + ' chamado(s) aguardando primeira resposta · ' + period.label.toLowerCase() + ' · ordenados do mais antigo para o mais recente'
       : kind === 'noSla'
-        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada primeiro, depois vinculado já tratado'
+        ? fmtInt(rows.length) + ' chamado(s) sem ciclo de SLA registrado · ' + period.label.toLowerCase() + ' · ordenados por sem hora lançada em lugar nenhum primeiro'
         : kind === 'tpaBucket'
           ? fmtInt(rows.length) + ' chamado(s) respondido(s) em ' + bucket.label + ' · ' + period.label.toLowerCase() + ' · ordenados do mais recente para o mais antigo'
           : fmtInt(rows.length) + ' chamado(s) com estouro · ' + period.label.toLowerCase() + ' · ordenados do mais crítico para o menos crítico';
@@ -1482,20 +1484,16 @@
     } else if (kind === 'noSla'){
       var relatedCellHtml = function(relKey, relSummary){
         if (!relKey) return '<span class="muted">—</span>';
-        var relT = ticketByKey(relKey);
-        var relUntreated = relT ? !ticketTreated(relT) : false; // só sinaliza quando o chamado relacionado está nos dados carregados
         var relTitle = relSummary ? escapeHtml(relSummary) : '';
-        var warnIcon = relUntreated
-          ? ' <span class="link-warn" title="'+(relTitle ? relTitle+' — ' : '')+'chamado sem horas lançadas e sem SLA cumprido">&#9888;</span>'
-          : '';
-        return '<a class="ticket-link mono" href="'+jiraUrl(relKey)+'" target="_blank" rel="noopener noreferrer" title="'+relTitle+'">'+escapeHtml(relKey)+'</a>' + warnIcon;
+        return '<a class="ticket-link mono" href="'+jiraUrl(relKey)+'" target="_blank" rel="noopener noreferrer" title="'+relTitle+'">'+escapeHtml(relKey)+'</a>';
       };
       var body = rows.map(function(r){
-        var rSlot = r[0], key = r[4], loggedSec = r[9];
+        var rSlot = r[0], key = r[4];
         var linkedKey = r[12], linkedSummary = r[13] || '';
         var analystCell = isAll ? '<td class="name-cell"><span class="swatch-inline" style="background:'+seriesColor(rSlot)+'"></span>'+analystBySlot(rSlot).short+'</td>' : '';
-        var horasCell = loggedSec
-          ? fmtDurationShort(loggedSec/60)
+        var hoursInfo = ownOrLinkedHours(r);
+        var horasCell = hoursInfo.sec
+          ? fmtDurationShort(hoursInfo.sec/60) + (hoursInfo.viaLinked ? ' <span class="muted" style="font-size:11px;">(vinculado)</span>' : '')
           : '<span class="muted">Sem apontamento</span>';
         return '<tr>' +
           '<td style="text-align:left"><a class="ticket-link mono" href="'+jiraUrl(key)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(key)+'</a></td>' +
